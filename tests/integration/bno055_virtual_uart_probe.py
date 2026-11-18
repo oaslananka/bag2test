@@ -21,8 +21,11 @@ import time
 from pathlib import Path
 
 import rclpy
+import rosbag2_py
 from rclpy.node import Node
+from rclpy.serialization import serialize_message
 from sensor_msgs.msg import Imu
+from std_msgs.msg import String
 
 MAX_FAILURES_AT_10HZ = 30
 SOURCE_DIRS = {
@@ -129,15 +132,68 @@ class Bno055VirtualUart:
 
 
 class ProbeSubscriber(Node):
-    def __init__(self) -> None:
+    def __init__(self, capture_dir: Path | None = None) -> None:
         super().__init__("bag2test_bno055_probe")
         self.received_at: list[float] = []
+        self.heartbeat_received = 0
+        self.writer: rosbag2_py.SequentialWriter | None = None
+        if capture_dir is not None:
+            if capture_dir.exists():
+                raise ValueError(f"Capture destination already exists: {capture_dir}")
+            if not capture_dir.parent.is_dir():
+                raise ValueError(
+                    f"Capture parent directory missing: {capture_dir.parent}"
+                )
+            writer = rosbag2_py.SequentialWriter()
+            writer.open(
+                rosbag2_py.StorageOptions(uri=str(capture_dir), storage_id="mcap"),
+                rosbag2_py.ConverterOptions(
+                    input_serialization_format="cdr",
+                    output_serialization_format="cdr",
+                ),
+            )
+            for name, ros_type in (
+                ("/bno055/imu", "sensor_msgs/msg/Imu"),
+                ("/bag2test/heartbeat", "std_msgs/msg/String"),
+            ):
+                writer.create_topic(
+                    rosbag2_py.TopicMetadata(
+                        id=0,
+                        name=name,
+                        type=ros_type,
+                        serialization_format="cdr",
+                    )
+                )
+            self.writer = writer
+            self.heartbeat_pub = self.create_publisher(
+                String, "/bag2test/heartbeat", 10
+            )
+            self.heartbeat_sub = self.create_subscription(
+                String, "/bag2test/heartbeat", self._on_heartbeat, 10
+            )
+            self.heartbeat_timer = self.create_timer(0.1, self._heartbeat)
         self._subscription = self.create_subscription(
-            Imu,
-            "/bno055/imu",
-            lambda _msg: self.received_at.append(time.monotonic()),
-            10,
+            Imu, "/bno055/imu", self._on_imu, 10
         )
+
+    def _on_imu(self, msg: Imu) -> None:
+        self.received_at.append(time.monotonic())
+        if self.writer is not None:
+            self.writer.write("/bno055/imu", serialize_message(msg), time.time_ns())
+
+    def _heartbeat(self) -> None:
+        self.heartbeat_pub.publish(String(data="supervisor-active"))
+
+    def _on_heartbeat(self, msg: String) -> None:
+        self.heartbeat_received += 1
+        if self.writer is not None:
+            self.writer.write(
+                "/bag2test/heartbeat", serialize_message(msg), time.time_ns()
+            )
+
+    def close_recording(self) -> None:
+        # SequentialWriter finalizes the on-disk MCAP on destruction.
+        self.writer = None
 
 
 def _advance(node: ProbeSubscriber, seconds: float) -> None:
@@ -207,6 +263,8 @@ def run_case(case: str) -> dict:
     if case == "healthy":
         uart.restore()
     node: ProbeSubscriber | None = None
+    capture = os.environ.get("BAG2TEST_BNO_CAPTURE_DIR")
+    capture_dir = Path(capture).resolve() if capture else None
     proc: subprocess.Popen | None = None
     restart: subprocess.Popen | None = None
     with tempfile.TemporaryDirectory(prefix="bno055-ros-") as folder:
@@ -214,15 +272,15 @@ def run_case(case: str) -> dict:
         logs: list[Path] = []
         try:
             rclpy.init()
-            node = ProbeSubscriber()
+            node = ProbeSubscriber(capture_dir)
             revision = "fixed" if case != "bad" else "bad"
             first_log = work / "first.log"
             logs.append(first_log)
             proc = _start_driver(revision, uart.port, first_log)
             _until(
                 node,
-                lambda: len(node.received_at) >= 4,
-                seconds=9,
+                lambda: len(node.received_at) >= (18 if capture_dir else 4),
+                seconds=12,
                 reason="No healthy IMU messages from the real ROS publisher before failure",
             )
             baseline_received = len(node.received_at)
@@ -316,6 +374,7 @@ def run_case(case: str) -> dict:
             if restart is not None:
                 _stop_driver(restart)
             if node is not None:
+                node.close_recording()
                 node.destroy_node()
                 rclpy.shutdown()
             uart.close()
