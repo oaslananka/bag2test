@@ -81,6 +81,31 @@ def write_results(
     )
 
     report = asdict(observed)
+    limitations = [
+        "A log-time gap does not prove messages were lost at the publisher or receiver.",
+        (
+            "A faulted recording cannot supply messages absent from its own gap; "
+            "evaluate hypotheses against a separate healthy input stream."
+        ),
+        "Runner startup and recording time origins may differ; align clocks.",
+        "Short injection windows may be missed by ROS timer scheduling.",
+        "The fault activation assertion does not verify a robot failure symptom.",
+        "Reproduction of this individual incident has not been performed.",
+    ]
+    if observed.publish_times_equal_log_times is True:
+        limitations.append(
+            "All selected MCAP publish_time values equal log_time; this file "
+            "provides no independent publish-vs-record clock evidence."
+        )
+    if (
+        observed.largest_gap
+        and observed.largest_gap.following_interval_ratio is not None
+        and observed.largest_gap.following_interval_ratio < 0.5
+    ):
+        limitations.append(
+            "The message immediately after the largest gap arrived faster "
+            "than half the median period; catch-up or batching is plausible."
+        )
     report.update(
         {
             "observation": "MCAP message log_time gaps only",
@@ -93,13 +118,7 @@ def write_results(
             "symptom_reproduced": "NOT_VERIFIED",
             "regression_verified": "NOT_VERIFIED",
             "root_cause": "UNKNOWN",
-            "limitations": [
-                "Recording gaps do not prove message loss at the publisher.",
-                "Runner startup time may differ from recording origin; schedule alignment is required.",
-                "A short injection window may be missed by real ROS timer scheduling.",
-                "The activation assertion does not verify the robot's failure symptom.",
-                "Upstream ROS runner execution has not been performed.",
-            ],
+            "limitations": limitations,
         }
     )
     out.mkdir(parents=True)

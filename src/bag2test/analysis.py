@@ -41,6 +41,9 @@ class Gap:
     end_ns: int
     duration_s: float
     ratio: float
+    # A rapid next message is compatible with jitter/batching, not proof.
+    following_interval_s: float | None = None
+    following_interval_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,8 @@ class Observation:
     threshold_ratio: float
     start_sec: float | None
     end_sec: float | None
+    # True means there is no separate publish-time signal in this MCAP.
+    publish_times_equal_log_times: bool | None = None
 
 
 def inspect(
@@ -94,6 +99,7 @@ def inspect(
             )
             first_topic_ns: int | None = None
             times: list[int] = []
+            publish_times_equal_log_times = True
             kind: str | None = None
 
             for schema, channel, message in reader.iter_messages(
@@ -132,6 +138,8 @@ def inspect(
                 ):
                     continue
                 times.append(message.log_time)
+                if message.publish_time != message.log_time:
+                    publish_times_equal_log_times = False
                 if len(times) > MAX_TOPIC_MESSAGES:
                     raise ObservationError(
                         f"Topic exceeds the first-spike limit of {MAX_TOPIC_MESSAGES} messages"
@@ -157,6 +165,7 @@ def inspect(
             min_gap_factor,
             start_sec,
             end_sec,
+            publish_times_equal_log_times,
         )
 
     positive = [right - left for left, right in pairwise(times) if right > left]
@@ -173,14 +182,33 @@ def inspect(
             min_gap_factor,
             start_sec,
             end_sec,
+            publish_times_equal_log_times,
         )
 
     period_ns = median(positive)
-    pair = max(pairwise(times), key=lambda x: x[1] - x[0])
-    delta = pair[1] - pair[0]
+    largest_idx = max(
+        range(len(times) - 1), key=lambda idx: times[idx + 1] - times[idx]
+    )
+    delta = times[largest_idx + 1] - times[largest_idx]
     ratio = delta / period_ns
-    # Only timing discontinuity is asserted. No physical fault cause is inferred.
-    gap = Gap(pair[0], pair[1], delta / 1e9, ratio) if ratio >= min_gap_factor else None
+    following_ns = (
+        times[largest_idx + 2] - times[largest_idx + 1]
+        if largest_idx + 2 < len(times)
+        else None
+    )
+    # This is a timestamp symptom only; never assert that messages were lost.
+    gap = (
+        Gap(
+            times[largest_idx],
+            times[largest_idx + 1],
+            delta / 1e9,
+            ratio,
+            following_ns / 1e9 if following_ns is not None else None,
+            following_ns / period_ns if following_ns is not None else None,
+        )
+        if ratio >= min_gap_factor
+        else None
+    )
 
     return Observation(
         topic,
@@ -194,4 +222,5 @@ def inspect(
         min_gap_factor,
         start_sec,
         end_sec,
+        publish_times_equal_log_times,
     )

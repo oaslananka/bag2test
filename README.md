@@ -22,7 +22,10 @@ python -m pip install -e .
 bag2test recording.mcap --topic /joint_states --out results
 ```
 
-`results/evidence.json` includes the selected topic, sample count, median log-time period, largest detected timing gap, hypothesis and verification statuses.
+`results/evidence.json` includes the selected topic, sample count, median
+log-time period, largest detected timing gap, the following interval, whether
+MCAP `publish_time` duplicates `log_time`, and hypothesis/verification
+statuses.
 
 If a gap exceeds the default threshold of **2.5 × median observed period**, `results/scenario.yaml` contains a candidate scenario using the upstream injector schema. Otherwise, only the report is written. `results` must not already exist.
 
@@ -34,7 +37,11 @@ bag2test recording.mcap --topic /joint_states \
   --input-topic /joint_states_raw --out window-results
 ```
 
-Input and output topics must be distinct. The user must arrange the upstream publisher remapping and test environment. The fault schedule is relative to the recording timestamp origin; it may require manual alignment with the ROS runner clock.
+Input and output topics must be distinct. The engineer must supply a **separate
+healthy ROS input stream**; messages already missing from a faulty recording
+cannot be dropped again. The user must arrange the publisher remapping and
+runner clock alignment. A generated fault is a candidate mechanism, not proof
+of the original fault's cause.
 
 ## Interpretation
 
@@ -43,7 +50,11 @@ Input and output topics must be distinct. The user must arrange the upstream pub
 - **INSUFFICIENT_DATA:** too few samples to estimate a useful cadence.
 - **NOT_VERIFIED:** the proposed fault was not exercised in ROS 2 and the failure was not reproduced.
 
-The current generator supports timing-gap hypotheses on `JointState`, `Odometry`, `LaserScan`, `Imu`, and `Twist` ROS 2 CDR topics. Only message metadata is inspected, not sensor or command payloads. A gap in recorded timestamps can result from sensor timing, transport, driver behavior or the recorder. It does not identify the physical cause.
+The current generator supports timing-gap hypotheses on `JointState`, `Odometry`, `LaserScan`, `Imu`, and `Twist` ROS 2 CDR topics. Only message metadata is inspected, not sensor or command payloads. A gap in recorded timestamps can result from sensor timing, transport, driver
+behavior or the recorder. The next interval may be unusually short, consistent
+with catch-up or batching. Equal MCAP publish/log timestamps do not provide
+an independent clock check. Neither pattern identifies message loss or its
+physical cause.
 
 A generated `fault_event` assertion only checks activation. It is **not** an assertion that the robot experienced the same failure. Short proposed windows may not be reliable under ROS timer scheduling. Never connect generated faults to a physical robot without independent controls.
 
