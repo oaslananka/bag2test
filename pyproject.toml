@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bag2test"
+version = "0.1.0.dev0"
+description = "Candidate ROS 2 fault scenarios derived from MCAP timing observations"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+dependencies = [
+  "mcap>=1.2,<2",
+  "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "ruff>=0.15,<1"]
+
+[project.scripts]
+bag2test = "bag2test.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bag2test"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
