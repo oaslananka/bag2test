@@ -18,7 +18,7 @@ from mcap.writer import Writer
 from rclpy.node import Node
 from rclpy.serialization import serialize_message
 from ros2_fault_injection.msg import FaultEvent
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import Imu, JointState
 
 from bag2test.analysis import inspect
 from bag2test.scenario import write_results
@@ -28,24 +28,45 @@ PUBLISH_S = 7.5
 SHORT_GAP_START_S = 2.5
 
 
-def make_recording(path: Path, *, gap_ms: int, hz: int) -> None:
+def make_recording(
+    path: Path, *, gap_ms: int, hz: int, message_type: str = "joint_state"
+) -> None:
     """MCAP with serialized JointState messages and a measured timing gap.
 
     Long gaps omit messages; short gaps adjust just one timestamp interval,
     keeping the nominal period on either side. This does not simulate a
     physical root cause or identify which packet was lost by the recorder.
     """
-    msg = JointState(name=["joint_a"], position=[1.0], velocity=[0.0])
+    if message_type == "imu":
+        msg = Imu()
+        msg.header.frame_id = "1"
+        schema_name = "sensor_msgs/msg/Imu"
+        schema_text = (
+            b"std_msgs/Header header\n"
+            b"geometry_msgs/Quaternion orientation\nfloat64[9] orientation_covariance\n"
+            b"geometry_msgs/Vector3 angular_velocity\nfloat64[9] angular_velocity_covariance\n"
+            b"geometry_msgs/Vector3 linear_acceleration\n"
+            b"float64[9] linear_acceleration_covariance\n"
+        )
+        topic = "/imu/data"
+    else:
+        msg = JointState(name=["joint_a"], position=[1.0], velocity=[0.0])
+        schema_name = "sensor_msgs/msg/JointState"
+        schema_text = (
+            b"std_msgs/Header header\nstring[] name\nfloat64[] position\n"
+            b"float64[] velocity\nfloat64[] effort\n"
+        )
+        topic = "/joint_states"
     with path.open("wb") as stream:
         writer = Writer(stream)
         writer.start()
         schema = writer.register_schema(
-            name="sensor_msgs/msg/JointState",
+            name=schema_name,
             encoding="ros2msg",
-            data=b"std_msgs/Header header\nstring[] name\nfloat64[] position\nfloat64[] velocity\nfloat64[] effort\n",
+            data=schema_text,
         )
         channel = writer.register_channel(
-            topic="/joint_states", message_encoding="cdr", schema_id=schema
+            topic=topic, message_encoding="cdr", schema_id=schema
         )
         period_s = 1.0 / hz
         for step in range(round(PUBLISH_S * hz)):
@@ -67,7 +88,9 @@ def make_recording(path: Path, *, gap_ms: int, hz: int) -> None:
         writer.finish()
 
 
-def run_once(file: Path, domain: int, *, hz: int) -> dict:
+def run_once(
+    file: Path, domain: int, *, hz: int, message_type: str = "joint_state"
+) -> dict:
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(domain)
     # A packaged hand-written YAML lives in /opt (read-only to the
@@ -93,16 +116,38 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
     try:
         rclpy.init()
         node = Node(f"bag2test_probe_{domain}")
-        publisher = node.create_publisher(JointState, "/joint_states_raw", 10)
+        if message_type == "imu":
+            msg_class = Imu
+            upstream_topic = "/imu/data_raw"
+            downstream_topic = "/imu/data"
+
+            def new_message(sequence: int) -> Imu:
+                msg = Imu()
+                msg.header.frame_id = str(sequence)
+                return msg
+
+            def read_sequence(msg: Imu) -> int:
+                return int(msg.header.frame_id)
+
+        else:
+            msg_class = JointState
+            upstream_topic = "/joint_states_raw"
+            downstream_topic = "/joint_states"
+
+            def new_message(sequence: int) -> JointState:
+                return JointState(name=["joint_a"], position=[float(sequence)])
+
+            def read_sequence(msg: JointState) -> int:
+                return int(msg.position[0])
+
+        publisher = node.create_publisher(msg_class, upstream_topic, 10)
         arrivals = []
         received_sequences = []
         warmup_received = []
         events = []
 
-        def on_joint_state(msg: JointState) -> None:
-            if not msg.position:
-                return
-            sequence = int(msg.position[0])
+        def on_message(msg: JointState | Imu) -> None:
+            sequence = read_sequence(msg)
             if sequence < 0:
                 warmup_received.append(time.monotonic())
                 return
@@ -110,9 +155,9 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
             received_sequences.append(sequence)
 
         _subscriber = node.create_subscription(
-            JointState,
-            "/joint_states",
-            on_joint_state,
+            msg_class,
+            downstream_topic,
+            on_message,
             10,
         )
         node.create_subscription(
@@ -136,7 +181,7 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
         # otherwise lost startup samples resemble injected dropouts.
         warmup_limit = time.monotonic() + 2.0
         while len(warmup_received) < 5 and time.monotonic() < warmup_limit:
-            publisher.publish(JointState(name=["joint_a"], position=[-1.0]))
+            publisher.publish(new_message(-1))
             rclpy.spin_once(node, timeout_sec=0.02)
         if len(warmup_received) < 5:
             raise RuntimeError(f"Cannot establish a healthy ROS relay; see {logfile}")
@@ -147,7 +192,7 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
         while time.monotonic() - begin < PUBLISH_S:
             now = time.monotonic()
             if now >= next_send:
-                publisher.publish(JointState(name=["joint_a"], position=[float(sent)]))
+                publisher.publish(new_message(sent))
                 sent += 1
                 next_send += 1.0 / hz
             rclpy.spin_once(node, timeout_sec=0.002)
@@ -189,7 +234,12 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
 
 
 def main(
-    repetitions: int, *, gap_ms: int, hz: int, compare_manual: bool = False
+    repetitions: int,
+    *,
+    gap_ms: int,
+    hz: int,
+    compare_manual: bool = False,
+    message_type: str = "joint_state",
 ) -> int:
     if not 1 <= repetitions <= 10:
         raise ValueError("repetitions must be between 1 and 10")
@@ -199,11 +249,16 @@ def main(
         raise ValueError("gap must be between 20 and 3000 ms")
     if gap_ms / 1000.0 <= 1.0 / hz:
         raise ValueError("gap must be greater than the nominal message period")
+    if message_type not in {"joint_state", "imu"}:
+        raise ValueError("message_type must be joint_state or imu")
+    if compare_manual and (gap_ms != 2000 or hz != 20 or message_type != "joint_state"):
+        raise ValueError("Manual baseline supports only 2000 ms, 20 Hz JointState")
     with tempfile.TemporaryDirectory(prefix="bag2test-runtime-") as folder:
         base = Path(folder)
         recording = base / "known_synthetic_gap.mcap"
-        make_recording(recording, gap_ms=gap_ms, hz=hz)
-        observation = inspect(recording, "/joint_states")
+        make_recording(recording, gap_ms=gap_ms, hz=hz, message_type=message_type)
+        topic = "/imu/data" if message_type == "imu" else "/joint_states"
+        observation = inspect(recording, topic)
         assert observation.status == "CANDIDATE"
         write_results(observation, base / "candidate")
         candidate = base / "candidate" / "scenario.yaml"
@@ -213,8 +268,12 @@ def main(
         healthy.write_text(yaml.safe_dump(control, sort_keys=False))
         passes = []
         for iteration in range(repetitions):
-            faulty = run_once(candidate, 110 + 2 * iteration, hz=hz)
-            normal = run_once(healthy, 111 + 2 * iteration, hz=hz)
+            faulty = run_once(
+                candidate, 110 + 2 * iteration, hz=hz, message_type=message_type
+            )
+            normal = run_once(
+                healthy, 111 + 2 * iteration, hz=hz, message_type=message_type
+            )
             common = (
                 faulty["activated"]
                 and faulty["deactivated"]
@@ -251,6 +310,7 @@ def main(
             "kind": "controlled_synthetic_ros2_injection",
             "mode": "short" if gap_ms < 1000 else "long",
             "publisher_hz": hz,
+            "message_type": message_type,
             "requested_gap_ms": gap_ms,
             "observed_source_gap_s": observation.largest_gap.duration_s,
             "passed": sum(passes),
@@ -262,8 +322,6 @@ def main(
         if compare_manual:
             # Compare against an independently authored static upstream YAML
             # baseline rather than assuming automated output is valuable.
-            if gap_ms != 2000 or hz != 20:
-                raise ValueError("Manual baseline supports only 2000 ms at 20 Hz")
             manual = Path(__file__).with_name("manual_joint_state.yaml")
             authored = yaml.safe_load(manual.read_text(encoding="utf-8"))
             generated = yaml.safe_load(candidate.read_text(encoding="utf-8"))
@@ -330,6 +388,11 @@ if __name__ == "__main__":
         "--hz", type=int, default=int(os.environ.get("BAG2TEST_HZ", str(DEFAULT_HZ)))
     )
     parser.add_argument(
+        "--message-type",
+        choices=("joint_state", "imu"),
+        default=os.environ.get("BAG2TEST_MESSAGE_TYPE", "joint_state"),
+    )
+    parser.add_argument(
         "--compare-manual",
         action="store_true",
         default=os.environ.get("BAG2TEST_COMPARE_MANUAL") == "1",
@@ -341,5 +404,6 @@ if __name__ == "__main__":
             gap_ms=args.gap_ms,
             hz=args.hz,
             compare_manual=args.compare_manual,
+            message_type=args.message_type,
         )
     )
