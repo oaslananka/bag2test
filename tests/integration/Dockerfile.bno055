@@ -8,7 +8,7 @@ ARG FIX_REV=fe31e0862b93414dff88a2e0ab496ca03cbbd5a0
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       git python3-serial python3-smbus \
+       git python3-serial python3-smbus ros-jazzy-example-interfaces \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --quiet https://github.com/ssharma0704/bno055.git /opt/bno055-source \
