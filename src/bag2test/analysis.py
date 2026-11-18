@@ -61,6 +61,11 @@ class Observation:
     end_sec: float | None
     # True means there is no separate publish-time signal in this MCAP.
     publish_times_equal_log_times: bool | None = None
+    # Coverage after the final selected-topic message is observable only
+    # when other MCAP messages extend the recording's global endpoint.
+    trailing_silence_s: float | None = None
+    trailing_silence_ratio: float | None = None
+    recording_end_ns: int | None = None
 
 
 def inspect(
@@ -94,6 +99,11 @@ def inspect(
             # selected channel as the relative timeline origin.
             origin_ns = (
                 summary.statistics.message_start_time
+                if summary and summary.statistics
+                else None
+            )
+            recording_end_ns = (
+                summary.statistics.message_end_time
                 if summary and summary.statistics
                 else None
             )
@@ -210,6 +220,17 @@ def inspect(
         else None
     )
 
+    trailing_silence_s = None
+    trailing_silence_ratio = None
+    # A clipped selection is not the entire observation interval. Without
+    # a separate external clock, infer neither a trailing outage nor a
+    # finite recovery when the selected topic is the last recorded stream.
+    if end_sec is None and recording_end_ns is not None:
+        remaining_ns = recording_end_ns - times[-1]
+        if remaining_ns / period_ns >= min_gap_factor:
+            trailing_silence_s = remaining_ns / 1e9
+            trailing_silence_ratio = remaining_ns / period_ns
+
     return Observation(
         topic,
         kind,
@@ -218,9 +239,18 @@ def inspect(
         origin_ns,
         period_ns / 1e9,
         gap,
-        "CANDIDATE" if gap else "NO_CANDIDATE",
+        (
+            "CANDIDATE"
+            if gap
+            else "TRAILING_SILENCE"
+            if trailing_silence_s is not None
+            else "NO_CANDIDATE"
+        ),
         min_gap_factor,
         start_sec,
         end_sec,
         publish_times_equal_log_times,
+        trailing_silence_s,
+        trailing_silence_ratio,
+        recording_end_ns,
     )
