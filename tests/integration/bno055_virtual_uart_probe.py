@@ -149,7 +149,9 @@ def _until(node: ProbeSubscriber, predicate, seconds: float, reason: str) -> Non
 
 def _start_driver(revision: str, port: str, logfile: Path) -> subprocess.Popen:
     env = dict(os.environ)
-    env["PYTHONPATH"] = SOURCE_DIRS[revision]
+    # Preserve the ROS 2 Python paths from the sourced Jazzy environment.
+    # Replacing them with the upstream package path hides rclpy in the child.
+    env["PYTHONPATH"] = SOURCE_DIRS[revision] + os.pathsep + env.get("PYTHONPATH", "")
     # ROS 2 Jazzy discovers only processes sharing this container's loopback.
     env["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
     logfile_handle = logfile.open("w", encoding="utf-8")
