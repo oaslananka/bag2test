@@ -1,42 +1,64 @@
 # bag2test
 
-bag2test is an experimental project investigating whether incidents recorded in ROS 2 bag files can be turned into reproducible regression tests.
+[![GitGem](https://gitgem.org/api/badge/github/oaslananka/bag2test.svg)](https://gitgem.org/github/oaslananka/bag2test)
+
+bag2test examines timing gaps in ROS 2 MCAP recordings and generates **candidate** fault-injection scenarios for selected topics.
 
 ## Status
 
-**Research / prototype stage.** The repository does not yet provide a usable command-line tool, an MCP server, or a validated end-to-end ROS 2 workflow. No real-robot incident reproduction has been demonstrated.
+**Experimental.** The current CLI reads MCAP message metadata and writes an observation report and, when a sufficiently large gap is found, a YAML candidate for [ros2_fault_injection](https://github.com/reeceholland/ros2_fault_injection). The output is not an executed regression test. No physical robot, ROS runner, or MCP integration has been validated.
 
-## Proposed workflow
+## Install
 
-1. Read an MCAP/ROS 2 recording and select a time window containing a suspected failure.
-2. Identify observable timing anomalies, such as message gaps, reduced publish rates, or stale samples.
-3. Generate *candidate* fault-injection scenarios and assertions for an existing ROS 2 test runner.
-4. Execute the candidates in a controlled test environment and compare observed behavior with the recorded incident.
-5. Record test evidence, including inconclusive results and failed reproduction attempts.
+Python 3.11 or later is required. ROS 2 is not required to inspect an MCAP file.
 
-The first experiments will focus on timing and message-delivery symptoms, rather than arbitrary robot failures.
+```bash
+python -m pip install -e .
+```
 
-## Evidence and limitations
+## Analyze a recording
 
-A gap in a recorded topic does not establish its cause. For example, a missing LiDAR message may originate in the sensor, driver, network, or recording process.
+```bash
+bag2test recording.mcap --topic /joint_states --out results
+```
 
-The project will distinguish:
+`results/evidence.json` includes the selected topic, sample count, median log-time period, largest detected timing gap, hypothesis and verification statuses.
 
-- **Observed:** an anomaly is present in the input data.
-- **Hypothesized:** a proposed mechanism could explain the observation.
-- **Symptom reproduced:** a controlled test produces the specified observable failure.
-- **Regression verified:** the same test fails against a known faulty baseline and passes against a changed version.
-- **Inconclusive:** evidence is missing, contradictory, or insufficient.
+If a gap exceeds the default threshold of **2.5 × median observed period**, `results/scenario.yaml` contains a candidate scenario using the upstream injector schema. Otherwise, only the report is written. `results` must not already exist.
 
-Reproducing a symptom is not proof that the original physical root cause has been identified. No generated scenario should be described as verified without execution evidence.
+For example, with a lower threshold and a selected time window:
 
-## Validation before expanding scope
+```bash
+bag2test recording.mcap --topic /joint_states \
+  --min-gap-factor 2.0 --start-sec 5 --end-sec 25 \
+  --input-topic /joint_states_raw --out window-results
+```
 
-The initial feasibility gate is one independently sourced robot recording, a generated executable scenario, repeated reproduction attempts, a negative control, and a comparison against a manually written equivalent test. Results and limitations should be published with the test data's license and provenance.
+Input and output topics must be distinct. The user must arrange the upstream publisher remapping and test environment. The fault schedule is relative to the recording timestamp origin; it may require manual alignment with the ROS runner clock.
 
-The intended integrations are [MCAP](https://mcap.dev/), [ros2_fault_injection](https://github.com/reeceholland/ros2_fault_injection), and [replay_testing](https://github.com/polymathrobotics/replay_testing). Integration compatibility has not yet been established.
+## Interpretation
 
-This project is not a general ROS debugger, a robot controller, or a safety system. It is not intended to run commands on physical robots.
+- **CANDIDATE:** a timestamp gap crossed the selected threshold; the generated injection is a hypothesis.
+- **NO_CANDIDATE:** the selected topic had no gap above that threshold.
+- **INSUFFICIENT_DATA:** too few samples to estimate a useful cadence.
+- **NOT_VERIFIED:** the proposed fault was not exercised in ROS 2 and the failure was not reproduced.
+
+The current generator supports timing-gap hypotheses on `JointState`, `Odometry`, `LaserScan`, `Imu`, and `Twist` ROS 2 CDR topics. Only message metadata is inspected, not sensor or command payloads. A gap in recorded timestamps can result from sensor timing, transport, driver behavior or the recorder. It does not identify the physical cause.
+
+A generated `fault_event` assertion only checks activation. It is **not** an assertion that the robot experienced the same failure. Short proposed windows may not be reliable under ROS timer scheduling. Never connect generated faults to a physical robot without independent controls.
+
+## Validation and limitations
+
+Run local tests:
+
+```bash
+python -m pip install -e ".[test]"
+python -m pytest -q
+```
+
+Unit tests use synthetic MCAP files with deliberately simple payloads and check timing, output shape and error handling. A [separate real-robot recording smoke test](docs/real-data-smoke.md) was performed without committing that recording. A controlled fault-injection run, a faulty-versus-fixed software comparison, and a manual-authoring time benchmark remain **not verified**.
+
+This repository is not a general ROS debugger, a robot controller, or a safety system.
 
 ## License
 
