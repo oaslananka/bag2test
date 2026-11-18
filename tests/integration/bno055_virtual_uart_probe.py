@@ -24,7 +24,6 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Imu
 
-GOOD_READS_BEFORE_FAILURE = 8
 MAX_FAILURES_AT_10HZ = 30
 SOURCE_DIRS = {
     "bad": "/opt/bno055-bad",
@@ -43,13 +42,22 @@ class Bno055VirtualUart:
         self.data_reads = 0
         self.silenced_reads = 0
         self.responded_data_reads = 0
-        self.silent_after: int | None = GOOD_READS_BEFORE_FAILURE
+        # Start healthy until the independent ROS subscriber confirms
+        # actual end-to-end message delivery; avoid DDS discovery races.
+        self.silent_after: int | None = None
         self.worker = threading.Thread(target=self._serve, daemon=True)
         self.worker.start()
 
     def restore(self) -> None:
         with self.lock:
             self.silent_after = None
+
+    def start_failure(self) -> None:
+        # Trigger the source-side transport failure only after independent
+        # ROS messages prove that the driver is healthy and connected.
+        with self.lock:
+            assert self.responded_data_reads >= 4
+            self.silent_after = self.responded_data_reads
 
     def stats(self) -> dict[str, int]:
         with self.lock:
@@ -218,6 +226,8 @@ def run_case(case: str) -> dict:
                 reason="No healthy IMU messages from the real ROS publisher before failure",
             )
             baseline_received = len(node.received_at)
+            if case != "healthy":
+                uart.start_failure()
             if case == "healthy":
                 _advance(node, 2)
                 assert proc.poll() is None, "Healthy node unexpectedly exited"
