@@ -252,3 +252,20 @@ def test_healthy_recording_still_reports_timestamp_provenance(tmp_path: Path):
     result = inspect(file, "/joint_states")
     assert result.status == "NO_CANDIDATE"
     assert result.publish_times_equal_log_times is False
+
+
+def test_manual_fault_scenario_matches_generated_synthetic_reference(tmp_path: Path):
+    """Semantic parity is measurable; human authoring-time savings are not."""
+    file = recording(
+        tmp_path,
+        intervals_ms=(50,) * 50 + (2000,) + (50,) * 55,
+    )
+    observed = inspect(file, "/joint_states")
+    assert observed.status == "CANDIDATE"
+    generated = candidate_scenario(observed)
+    manual = yaml.safe_load(
+        (Path(__file__).parent / "integration" / "manual_joint_state.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert generated == manual

@@ -70,7 +70,9 @@ def make_recording(path: Path, *, gap_ms: int, hz: int) -> None:
 def run_once(file: Path, domain: int, *, hz: int) -> dict:
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(domain)
-    logfile = file.with_name(f"runner-{domain}.log")
+    # A packaged hand-written YAML lives in /opt (read-only to the
+    # non-root container user); write runner logs into a secure temp file.
+    logfile = Path(tempfile.mkdtemp(prefix=f"bag2test-runner-{domain}-")) / "runner.log"
     out = logfile.open("w", encoding="utf-8")
     proc = subprocess.Popen(
         [
