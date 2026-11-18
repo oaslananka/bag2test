@@ -34,4 +34,4 @@ RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin bag2test
 ENV HOME=/home/bag2test
 USER bag2test
 
-CMD ["/bin/bash","-lc","source /opt/ros/jazzy/setup.bash && source /workspaces/fault_ws/install/setup.bash && /opt/bag2test-venv/bin/python /opt/bag2test/tests/integration/runtime_probe.py --repetitions 3"]
+CMD ["/bin/bash","-lc","source /opt/ros/jazzy/setup.bash && source /workspaces/fault_ws/install/setup.bash && /opt/bag2test-venv/bin/python /opt/bag2test/tests/integration/runtime_probe.py"]

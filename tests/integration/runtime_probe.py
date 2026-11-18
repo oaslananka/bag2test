@@ -116,14 +116,24 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.05)
-            if publisher.get_subscription_count() and node.count_publishers(
-                "/joint_states"
-            ):
+            if publisher.get_subscription_count() and _subscriber.get_publisher_count():
                 break
             if proc.poll() is not None:
                 raise RuntimeError(f"Injector crashed; see {logfile}")
         else:
             raise RuntimeError(f"Injector did not become ready; see {logfile}")
+
+        # DDS graph discovery is asynchronous. Confirm the full relay by
+        # receiving a handful of warmup messages before counting sequences;
+        # otherwise lost startup samples resemble injected dropouts.
+        warmup_limit = time.monotonic() + 2.0
+        while len(received_sequences) < 5 and time.monotonic() < warmup_limit:
+            publisher.publish(JointState(name=["joint_a"], position=[-1.0]))
+            rclpy.spin_once(node, timeout_sec=0.02)
+        if len(received_sequences) < 5:
+            raise RuntimeError(f"Cannot establish a healthy ROS relay; see {logfile}")
+        arrivals.clear()
+        received_sequences.clear()
 
         begin = time.monotonic()
         next_send = begin
