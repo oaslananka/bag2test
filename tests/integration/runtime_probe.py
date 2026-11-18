@@ -23,12 +23,18 @@ from sensor_msgs.msg import JointState
 from bag2test.analysis import inspect
 from bag2test.scenario import write_results
 
-HZ = 20
+DEFAULT_HZ = 20
 PUBLISH_S = 7.5
+SHORT_GAP_START_S = 2.5
 
 
-def make_recording(path: Path) -> None:
-    """MCAP with genuinely serialized ROS 2 CDR messages and known 2s gap."""
+def make_recording(path: Path, *, gap_ms: int, hz: int) -> None:
+    """MCAP with serialized JointState messages and a measured timing gap.
+
+    Long gaps omit messages; short gaps adjust just one timestamp interval,
+    keeping the nominal period on either side. This does not simulate a
+    physical root cause or identify which packet was lost by the recorder.
+    """
     msg = JointState(name=["joint_a"], position=[1.0], velocity=[0.0])
     with path.open("wb") as stream:
         writer = Writer(stream)
@@ -41,10 +47,16 @@ def make_recording(path: Path) -> None:
         channel = writer.register_channel(
             topic="/joint_states", message_encoding="cdr", schema_id=schema
         )
-        for step in range(150):
-            seconds = step / HZ
-            if 2.5 < seconds < 4.5:
-                continue
+        period_s = 1.0 / hz
+        for step in range(round(PUBLISH_S * hz)):
+            seconds = step * period_s
+            if gap_ms >= 1000:
+                if SHORT_GAP_START_S < seconds < SHORT_GAP_START_S + gap_ms / 1000.0:
+                    continue
+            elif seconds > SHORT_GAP_START_S:
+                # One interval has exactly the chosen gap, rather than
+                # rounding an omitted number of full messages.
+                seconds += gap_ms / 1000.0 - period_s
             ns = 1_000_000_000 + round(seconds * 1_000_000_000)
             writer.add_message(
                 channel_id=channel,
@@ -55,7 +67,7 @@ def make_recording(path: Path) -> None:
         writer.finish()
 
 
-def run_once(file: Path, domain: int) -> dict:
+def run_once(file: Path, domain: int, *, hz: int) -> dict:
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(domain)
     logfile = file.with_name(f"runner-{domain}.log")
@@ -81,11 +93,18 @@ def run_once(file: Path, domain: int) -> dict:
         node = Node(f"bag2test_probe_{domain}")
         publisher = node.create_publisher(JointState, "/joint_states_raw", 10)
         arrivals = []
+        received_sequences = []
         events = []
-        node.create_subscription(
+
+        def on_joint_state(msg: JointState) -> None:
+            arrivals.append(time.monotonic())
+            if msg.position:
+                received_sequences.append(int(msg.position[0]))
+
+        _subscriber = node.create_subscription(
             JointState,
             "/joint_states",
-            lambda _: arrivals.append(time.monotonic()),
+            on_joint_state,
             10,
         )
         node.create_subscription(
@@ -114,13 +133,21 @@ def run_once(file: Path, domain: int) -> dict:
             if now >= next_send:
                 publisher.publish(JointState(name=["joint_a"], position=[float(sent)]))
                 sent += 1
-                next_send += 1.0 / HZ
-            rclpy.spin_once(node, timeout_sec=0.005)
+                next_send += 1.0 / hz
+            rclpy.spin_once(node, timeout_sec=0.002)
+        # Let the reliable publisher/subscriber pair flush in-flight messages
+        # before attributing gaps to the fault injector.
+        for _ in range(20):
+            rclpy.spin_once(node, timeout_sec=0.01)
         gaps = [b - a for a, b in pairwise(arrivals)]
+        delivered = set(received_sequences)
+        missing = [seq for seq in range(sent) if seq not in delivered]
         return {
             "domain": domain,
             "sent": sent,
             "received": len(arrivals),
+            "missing_sequence_count": len(missing),
+            "missing_sequence_sample": missing[:12],
             "max_gap_s": round(max(gaps, default=0.0), 3),
             "activated": ("candidate_gap", "active") in events,
             "deactivated": ("candidate_gap", "inactive") in events,
@@ -145,13 +172,19 @@ def run_once(file: Path, domain: int) -> dict:
         out.close()
 
 
-def main(repetitions: int) -> int:
+def main(repetitions: int, *, gap_ms: int, hz: int) -> int:
     if not 1 <= repetitions <= 10:
         raise ValueError("repetitions must be between 1 and 10")
+    if not 20 <= hz <= 200:
+        raise ValueError("publisher rate must be between 20 and 200 Hz")
+    if not 20 <= gap_ms <= 3000:
+        raise ValueError("gap must be between 20 and 3000 ms")
+    if gap_ms / 1000.0 <= 1.0 / hz:
+        raise ValueError("gap must be greater than the nominal message period")
     with tempfile.TemporaryDirectory(prefix="bag2test-runtime-") as folder:
         base = Path(folder)
         recording = base / "known_synthetic_gap.mcap"
-        make_recording(recording)
+        make_recording(recording, gap_ms=gap_ms, hz=hz)
         observation = inspect(recording, "/joint_states")
         assert observation.status == "CANDIDATE"
         write_results(observation, base / "candidate")
@@ -162,17 +195,28 @@ def main(repetitions: int) -> int:
         healthy.write_text(yaml.safe_dump(control, sort_keys=False))
         passes = []
         for iteration in range(repetitions):
-            faulty = run_once(candidate, 110 + 2 * iteration)
-            normal = run_once(healthy, 111 + 2 * iteration)
-            ok = (
+            faulty = run_once(candidate, 110 + 2 * iteration, hz=hz)
+            normal = run_once(healthy, 111 + 2 * iteration, hz=hz)
+            common = (
                 faulty["activated"]
                 and faulty["deactivated"]
-                and faulty["max_gap_s"] >= 1.2
-                and faulty["sent"] >= 100
+                and faulty["sent"] >= hz * 6
                 and normal["activated"]
-                and normal["max_gap_s"] < 0.4
-                and normal["sent"] >= 100
+                and normal["sent"] >= hz * 6
+                and normal["missing_sequence_count"] == 0
             )
+            if gap_ms >= 1000:
+                ok = (
+                    common
+                    and faulty["max_gap_s"] >= 1.2
+                    and faulty["missing_sequence_count"] > 0
+                    and normal["max_gap_s"] < 0.4
+                )
+            else:
+                # A fault lifecycle event is not proof that a 27ms window
+                # coincided with any published JointState. Count the missing
+                # sequence numbers independently instead.
+                ok = common and faulty["missing_sequence_count"] > 0
             passes.append(ok)
             print(
                 json.dumps(
@@ -187,6 +231,9 @@ def main(repetitions: int) -> int:
             )
         result = {
             "kind": "controlled_synthetic_ros2_injection",
+            "mode": "short" if gap_ms < 1000 else "long",
+            "publisher_hz": hz,
+            "requested_gap_ms": gap_ms,
             "observed_source_gap_s": observation.largest_gap.duration_s,
             "passed": sum(passes),
             "trials": len(passes),
@@ -201,4 +248,7 @@ def main(repetitions: int) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--repetitions", type=int, default=3)
-    raise SystemExit(main(parser.parse_args().repetitions))
+    parser.add_argument("--gap-ms", type=int, default=2000)
+    parser.add_argument("--hz", type=int, default=DEFAULT_HZ)
+    args = parser.parse_args()
+    raise SystemExit(main(args.repetitions, gap_ms=args.gap_ms, hz=args.hz))

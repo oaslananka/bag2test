@@ -6,7 +6,7 @@ bag2test examines timing gaps in ROS 2 MCAP recordings and generates **candidate
 
 ## Status
 
-**Experimental.** The current CLI reads MCAP message metadata and writes an observation report and, when a sufficiently large gap is found, a YAML candidate for [ros2_fault_injection](https://github.com/reeceholland/ros2_fault_injection). The output is not an executed regression test. No physical robot, ROS runner, or MCP integration has been validated.
+**Experimental.** The current CLI reads MCAP message metadata and writes an observation report and, when a sufficiently large gap is found, a YAML candidate for [ros2_fault_injection](https://github.com/reeceholland/ros2_fault_injection). The output is not an executed regression test. An optional controlled synthetic ROS 2 runner test has passed; no physical robot, field incident, or MCP integration has been validated.
 
 ## Install
 
