@@ -110,3 +110,69 @@ The case illustrates a crucial product constraint: **recreating a visible
 topic silence is not necessarily reproducing the original failure
 mechanism or validating the software fix**. bag2test must not call that
 a reproduced field incident.
+
+## 3. Real ROS 2 executor, UART connector and external restart (virtual sensor)
+
+This stronger opt-in regression executes the **unchanged pinned source**
+revisions with the actual ROS 2 Jazzy `rclpy.spin` executor and the
+driver's real `pyserial` UART connector. A pseudo-terminal responds to
+the BNO055 register protocol, initially providing a valid chip ID and
+IMU values. After an independent ROS 2 subscriber has received at
+least four `sensor_msgs/msg/Imu` messages, the pseudo-terminal stops
+replying to actual 45-byte sensor read requests.
+
+An independent local Python test supervisor observes the driver's
+process. For the repaired source, it waits for a nonzero exit,
+allows the virtual sensor to respond again, starts a new **unmodified**
+driver process and checks that ROS 2 topic traffic resumes. This is
+not a `systemd`-managed service test.
+
+### Reproduce (opt-in, CPU-only)
+
+The image fetches upstream source only **at build time**, verifies
+the exact Git revisions and driver-file hashes, installs ROS 2 Jazzy
+dependencies and runs as a non-root user. Runtime networking is disabled;
+no host serial devices are mounted.
+
+```bash
+docker build -f tests/integration/Dockerfile.bno055 \
+  -t bag2test-bno055-regression .
+
+for case in healthy bad fixed; do
+  docker run --rm --network none --memory 2g --cpus 2 \
+    -e BAG2TEST_BNO_CASE="$case" \
+    bag2test-bno055-regression
+done
+```
+
+The opt-in entry point is
+`tests/integration/bno055_virtual_uart_probe.py`.
+It emits machine-readable JSON and fails on an unmet assertion. These
+tests are **not** run during ordinary PR CI, require no physical robot
+and do not install dependencies into the project's normal Python package.
+
+### Measured results
+
+Two separate healthy / faulty / repaired test sets were run on the
+same isolated image. All **6/6** runs returned PASS.
+
+| Run | Healthy control | Faulty revision | Repaired revision |
+| --- | --- | --- | --- |
+| First | 24 real ROS IMU messages; driver alive | 45 silent serial reads; zero additional IMU messages; driver still alive | 30 consecutive failed reads; driver exits 1; one external restart; 5 recovered IMU messages |
+| Second | 24 real ROS IMU messages; driver alive | 45 silent serial reads; zero additional IMU messages; driver still alive | 30 consecutive failed reads; driver exits 1; one external restart; 5 recovered IMU messages |
+
+The injector failure is at the *UART request/response boundary* of
+the real driver, not an after-publication ROS topic drop. The ROS 2
+executor, publisher, subscriber and process lifecycle are all real
+inside the container. The sensor responses are **software-emulated**;
+a BNO055 device and the production supervisor have **not** been tested.
+The source-level driver regression and its externally supervised
+recovery are therefore verified *under virtual UART conditions only*.
+
+This test remains independent of bag2test's `scenario.yaml`: the
+current generator can inject ROS message loss, but **cannot create
+an internal serial read exception or restart a node**. The fact that
+the virtual UART regression passes is **not** evidence that an
+MCAP-derived topic-drop YAML validates this particular firmware/driver
+fix. Its proposed causal mechanism must still be evaluated separately
+on a suitable labeled recording.

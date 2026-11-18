@@ -69,13 +69,18 @@ python -m pytest -q
 
 Unit tests use synthetic MCAP files and check timing, output shape and error handling. The [real-robot recording smoke test](docs/real-data-smoke.md) analyzes a separate, non-committed recording. An [opt-in ROS 2 runtime acceptance test](docs/ros2-runtime-acceptance.md) exercises the generated YAML against a compiled fault injector with synthetic ROS messages and negative controls (3/3 PASS); a separate 27 ms / 100 Hz synthetic short-window acceptance
 run measured downstream sequence loss against a zero-drop control (5/5
-PASS). A genuine field-incident regression, a faulty-versus-fixed software comparison, and a manual-authoring time benchmark remain **not verified**.
+PASS). An independent upstream BNO055 driver bug/fix has also been
+tested with a real ROS 2 executor and a software-emulated UART
+(6/6 controlled trials PASS). This is **not** a physical hardware
+or labeled field-incident regression; no manual-authoring time
+benchmark has been verified.
 
 A [comparative feasibility check](docs/comparative-benchmark.md) confirms
 that existing ROS recording tools also find the same timing-gap observation.
 An [independently pinned IMU driver regression](docs/upstream-imu-regression.md)
-distinguishes a genuine source-level fix from a merely similar ROS topic-drop
-symptom. The tool's output remains an **unverified candidate** for an
+demonstrates the actual ROS 2 driver bug/fix and virtual-UART supervised
+recovery, separately from a synthetically injected ROS topic drop.
+The CLI's output remains an **unverified candidate** for an
 existing fault-injection runner; no human engineering-time advantage is established.
 
 This repository is not a general ROS debugger, a robot controller, or a safety system.
