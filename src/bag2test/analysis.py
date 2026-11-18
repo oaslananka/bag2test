@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from statistics import median
+from struct import unpack_from
 
 from mcap.exceptions import McapError
 from mcap.reader import make_reader
@@ -21,10 +22,33 @@ SUPPORTED_TYPES = {
 }
 MAX_TOPIC_MESSAGES = 250_000
 MIN_TOPIC_MESSAGES = 10
+HEADER_TYPES = set(SUPPORTED_TYPES) - {"geometry_msgs/msg/Twist"}
 
 
 class ObservationError(ValueError):
     """Invalid input or unsafe/incompatible message metadata."""
+
+
+def _cdr_header_stamp_ns(payload: bytes) -> int:
+    """Read std_msgs/Header.stamp from a ROS 2 CDR message beginning with Header.
+
+    Fail closed on unsupported CDR encapsulations, invalid or unset clocks.
+    This does not deserialize other fields or claim clock synchronization.
+    """
+    if len(payload) < 12 or payload[:4] not in (
+        b"\x00\x01\x00\x00",
+        b"\x00\x00\x00\x00",
+    ):
+        raise ObservationError(
+            "header time requires valid ROS 2 CDR1 payload (supported encapsulation)"
+        )
+    endian = "<" if payload[1] == 1 else ">"
+    seconds, nanos = unpack_from(f"{endian}iI", payload, 4)
+    if seconds <= 0 or nanos >= 1_000_000_000:
+        raise ObservationError(
+            "header time requires a nonzero valid ROS 2 header.stamp"
+        )
+    return seconds * 1_000_000_000 + nanos
 
 
 def canonical_type(name: str) -> str:
@@ -66,6 +90,9 @@ class Observation:
     trailing_silence_s: float | None = None
     trailing_silence_ratio: float | None = None
     recording_end_ns: int | None = None
+    time_basis: str = "log"
+    timing_origin_ns: int | None = None
+    first_selected_log_ns: int | None = None
 
 
 def inspect(
@@ -75,7 +102,10 @@ def inspect(
     min_gap_factor: float = 2.5,
     start_sec: float | None = None,
     end_sec: float | None = None,
+    time_basis: str = "log",
 ) -> Observation:
+    if time_basis not in {"log", "header"}:
+        raise ObservationError("time_basis must be 'log' or 'header'")
     if not topic:
         raise ObservationError("Topic must not be empty")
     if not (1.0 < min_gap_factor <= 100.0):
@@ -109,6 +139,9 @@ def inspect(
             )
             first_topic_ns: int | None = None
             times: list[int] = []
+            first_selected_log_ns: int | None = None
+            last_selected_log_ns: int | None = None
+            timing_origin_ns: int | None = None
             publish_times_equal_log_times = True
             kind: str | None = None
 
@@ -126,6 +159,10 @@ def inspect(
                     raise ObservationError(
                         f"Unsupported ROS 2 type {this_type!r}; supported types: "
                         + ", ".join(sorted(SUPPORTED_TYPES))
+                    )
+                if time_basis == "header" and this_type not in HEADER_TYPES:
+                    raise ObservationError(
+                        f"header time is unsupported for {this_type}: no std_msgs/Header"
                     )
                 if kind is None:
                     kind = this_type
@@ -147,7 +184,21 @@ def inspect(
                     end_sec * 1e9
                 ):
                     continue
-                times.append(message.log_time)
+                if first_selected_log_ns is None:
+                    first_selected_log_ns = message.log_time
+                last_selected_log_ns = message.log_time
+                if time_basis == "header":
+                    stamp = _cdr_header_stamp_ns(message.data)
+                    if times and stamp <= times[-1]:
+                        raise ObservationError(
+                            "non-monotonic header stamps in recording order; "
+                            "cannot establish timing gaps safely"
+                        )
+                    if timing_origin_ns is None:
+                        timing_origin_ns = stamp
+                    times.append(stamp)
+                else:
+                    times.append(message.log_time)
                 if message.publish_time != message.log_time:
                     publish_times_equal_log_times = False
                 if len(times) > MAX_TOPIC_MESSAGES:
@@ -176,6 +227,9 @@ def inspect(
             start_sec,
             end_sec,
             publish_times_equal_log_times,
+            time_basis=time_basis,
+            timing_origin_ns=timing_origin_ns,
+            first_selected_log_ns=first_selected_log_ns,
         )
 
     positive = [right - left for left, right in pairwise(times) if right > left]
@@ -193,6 +247,9 @@ def inspect(
             start_sec,
             end_sec,
             publish_times_equal_log_times,
+            time_basis=time_basis,
+            timing_origin_ns=timing_origin_ns,
+            first_selected_log_ns=first_selected_log_ns,
         )
 
     period_ns = median(positive)
@@ -226,7 +283,8 @@ def inspect(
     # a separate external clock, infer neither a trailing outage nor a
     # finite recovery when the selected topic is the last recorded stream.
     if end_sec is None and recording_end_ns is not None:
-        remaining_ns = recording_end_ns - times[-1]
+        assert last_selected_log_ns is not None
+        remaining_ns = recording_end_ns - last_selected_log_ns
         if remaining_ns / period_ns >= min_gap_factor:
             trailing_silence_s = remaining_ns / 1e9
             trailing_silence_ratio = remaining_ns / period_ns
@@ -253,4 +311,7 @@ def inspect(
         trailing_silence_s,
         trailing_silence_ratio,
         recording_end_ns,
+        time_basis,
+        timing_origin_ns,
+        first_selected_log_ns,
     )

@@ -27,7 +27,22 @@ def candidate_scenario(
     if source == output or source == "/":
         raise ObservationError("Input topic must differ from the output topic")
 
-    start = (observed.largest_gap.start_ns - observed.bag_start_ns) / 1e9
+    if observed.time_basis == "header":
+        if observed.timing_origin_ns is None or observed.first_selected_log_ns is None:
+            raise ObservationError("Header clock origin is missing")
+        # The header clock is independent of the recorder's log clock.
+        # Place header-relative elapsed time after the first observed
+        # selected-topic message on the bag clock. This is an *assumption*
+        # the engineer must align to their actual independent ROS runner.
+        start_ns = (
+            observed.first_selected_log_ns
+            - observed.bag_start_ns
+            + observed.largest_gap.start_ns
+            - observed.timing_origin_ns
+        )
+    else:
+        start_ns = observed.largest_gap.start_ns - observed.bag_start_ns
+    start = start_ns / 1e9
     duration = observed.largest_gap.duration_s
     # drop_probability=1 is a *hypothesis* matching a gap symptom, not an
     # inference about which physical cause produced the original recording.
@@ -82,7 +97,7 @@ def write_results(
 
     report = asdict(observed)
     limitations = [
-        "A log-time gap does not prove messages were lost at the publisher or receiver.",
+        "A recorded timestamp gap alone cannot prove whether a publisher or receiver lost messages.",
         (
             "A faulted recording cannot supply messages absent from its own gap; "
             "evaluate hypotheses against a separate healthy input stream."
@@ -92,6 +107,18 @@ def write_results(
         "The fault activation assertion does not verify a robot failure symptom.",
         "Reproduction of this individual incident has not been performed.",
     ]
+    if observed.time_basis == "header":
+        limitations.append(
+            "header.stamp is a sender-provided ROS timestamp, not a verified "
+            "synchronized clock. Candidate start is anchored at the first "
+            "selected-topic log_time plus elapsed header time; runner clock "
+            "alignment remains unverified."
+        )
+        limitations.append(
+            "Trailing coverage, when present, is measured from MCAP log_time "
+            "even when the cadence uses header.stamp. It is not physical "
+            "proof that the sender was active."
+        )
     if observed.trailing_silence_s is not None:
         limitations.append(
             "The selected topic stops before the recording's global endpoint; "
@@ -119,7 +146,11 @@ def write_results(
         )
     report.update(
         {
-            "observation": "MCAP message log_time gaps only",
+            "observation": (
+                "ROS 2 CDR Header.stamp intervals (sender time)"
+                if observed.time_basis == "header"
+                else "MCAP message log_time gaps only"
+            ),
             "hypothesis": (
                 "A temporary full message drop could reproduce this timing symptom"
                 if scenario
