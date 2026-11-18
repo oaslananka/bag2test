@@ -22,6 +22,16 @@ def main(argv: list[str] | None = None) -> int:
         "--out", required=True, help="New output directory (must not exist)"
     )
     parser.add_argument("--min-gap-factor", type=float, default=2.5)
+    parser.add_argument(
+        "--time-basis",
+        choices=("log", "header"),
+        default="log",
+        help=(
+            "log: recorder receive timeline (default); header: ROS 2 CDR "
+            "std_msgs/Header.stamp for stamped messages. Clocks are not "
+            "automatically synchronized."
+        ),
+    )
     parser.add_argument("--start-sec", type=float, default=None)
     parser.add_argument("--end-sec", type=float, default=None)
     parser.add_argument(
@@ -35,12 +45,21 @@ def main(argv: list[str] | None = None) -> int:
             min_gap_factor=args.min_gap_factor,
             start_sec=args.start_sec,
             end_sec=args.end_sec,
+            time_basis=args.time_basis,
         )
         files = write_results(observation, args.out, input_topic=args.input_topic)
     except ObservationError as exc:
         print(f"bag2test: {exc}", file=sys.stderr)
         return 2
-    print(f"Observation: {observation.status} ({observation.count} messages)")
+    print(
+        f"Observation: {observation.status} ({observation.count} messages; "
+        f"time basis: {observation.time_basis})"
+    )
+    if observation.time_basis == "header":
+        print(
+            "Header time uses the sender's clock. Bag/runner clock "
+            "alignment is NOT VERIFIED."
+        )
     for path in files:
         print(f"Wrote: {path}")
     if observation.trailing_silence_s is not None:
@@ -55,6 +74,14 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "Caution: MCAP publish_time equals log_time for every selected "
                 "message; there is no independent publisher timing evidence."
+            )
+        if observation.time_basis == "log" and observation.message_type != (
+            "geometry_msgs/msg/Twist"
+        ):
+            print(
+                "Recorder buffering may create false log-time gaps. "
+                "For stamped ROS 2 topics, compare --time-basis header "
+                "with an explicit threshold."
             )
         next_ratio = observation.largest_gap.following_interval_ratio
         if next_ratio is not None and next_ratio < 0.5:

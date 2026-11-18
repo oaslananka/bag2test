@@ -22,12 +22,26 @@ python -m pip install -e .
 bag2test recording.mcap --topic /joint_states --out results
 ```
 
-`results/evidence.json` includes the selected topic, sample count, median
-log-time period, largest detected timing gap, the following interval, whether
-MCAP `publish_time` duplicates `log_time`, and hypothesis/verification
-statuses.
+`results/evidence.json` includes the topic, sample count, time basis,
+median period, largest timing gap and following interval, whether MCAP
+`publish_time` duplicates `log_time`, and hypothesis/verification statuses.
+The default basis is recorder `log_time`.
 
 If a gap exceeds the default threshold of **2.5 × median observed period**, `results/scenario.yaml` contains a candidate scenario using the upstream injector schema. Otherwise, only the report is written. `results` must not already exist.
+
+Recorder buffering may produce false timing gaps. For stamped ROS 2 topics,
+the sensor-supplied time can be explicitly selected:
+
+```bash
+bag2test recording.mcap --topic /scan --time-basis header   --min-gap-factor 4.0 --out header-results
+```
+
+The **4× setting** in this example comes from an
+[independently labeled ROS 2 clean/attack comparison](docs/leon-timestamp-benchmark.md),
+not a universal calibrated threshold. Invalid or nonmonotonic sender stamps
+are rejected; an unsynchronized sender clock is not automatically corrected.
+`Twist` has no header. Window bounds and recording-end coverage continue
+to use recorder time. Generated YAML remains an unverified hypothesis.
 
 For example, with a lower threshold and a selected time window:
 
@@ -57,7 +71,7 @@ A one-topic recording cannot establish how long its silent sensor
 remained unobserved; a clipped analysis window cannot establish a
 terminal outage.
 
-The current generator supports timing-gap hypotheses on `JointState`, `Odometry`, `LaserScan`, `Imu`, and `Twist` ROS 2 CDR topics. Only message metadata is inspected, not sensor or command payloads. A gap in recorded timestamps can result from sensor timing, transport, driver
+The current generator supports timing-gap hypotheses on `JointState`, `Odometry`, `LaserScan`, `Imu`, and `Twist` ROS 2 CDR topics. By default only MCAP metadata is inspected; optional header mode decodes sender timestamps but not the remaining sensor or command payloads. A gap in recorded timestamps can result from sensor timing, transport, driver
 behavior or the recorder. The next interval may be unusually short, consistent
 with catch-up or batching. Equal MCAP publish/log timestamps do not provide
 an independent clock check. Neither pattern identifies message loss or its
