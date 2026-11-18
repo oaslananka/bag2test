@@ -1,0 +1,24 @@
+# Independently hand-authored reference for the documented synthetic fixture:
+# 20 Hz JointState publisher, two-second pause after 2.5 s.
+# NOT a real robot incident and NOT a known faulty/fixed software revision.
+injectors:
+  - id: bag2test_topic
+    type: joint_state
+    topic:
+      input_topic: /joint_states_raw
+      output_topic: /joint_states
+      qos_depth: 10
+faults:
+  - id: candidate_gap
+    injector_id: bag2test_topic
+    active_on_startup: false
+    start: 2.5
+    duration: 2.0
+    config:
+      drop_probability: 1.0
+assertions:
+  - id: candidate_fault_activates
+    type: fault_event
+    fault_id: candidate_gap
+    state: active
+    within: 7.5

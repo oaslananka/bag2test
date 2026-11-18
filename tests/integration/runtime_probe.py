@@ -186,7 +186,9 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
         out.close()
 
 
-def main(repetitions: int, *, gap_ms: int, hz: int) -> int:
+def main(
+    repetitions: int, *, gap_ms: int, hz: int, compare_manual: bool = False
+) -> int:
     if not 1 <= repetitions <= 10:
         raise ValueError("repetitions must be between 1 and 10")
     if not 20 <= hz <= 200:
@@ -255,8 +257,61 @@ def main(repetitions: int, *, gap_ms: int, hz: int) -> int:
             "faulty_vs_fixed_regression": "NOT_VERIFIED",
             "result": "PASS" if all(passes) else "FAIL",
         }
+        if compare_manual:
+            # Compare against an independently authored static upstream YAML
+            # baseline rather than assuming automated output is valuable.
+            if gap_ms != 2000 or hz != 20:
+                raise ValueError("Manual baseline supports only 2000 ms at 20 Hz")
+            manual = Path(__file__).with_name("manual_joint_state.yaml")
+            authored = yaml.safe_load(manual.read_text(encoding="utf-8"))
+            generated = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+            if authored != generated:
+                raise AssertionError(
+                    "Generated scenario diverges from independently authored YAML"
+                )
+            manual_control = yaml.safe_load(manual.read_text(encoding="utf-8"))
+            manual_control["faults"][0]["config"]["drop_probability"] = 0.0
+            manual_healthy = base / "manual_control.yaml"
+            manual_healthy.write_text(
+                yaml.safe_dump(manual_control, sort_keys=False),
+                encoding="utf-8",
+            )
+            baseline_passes = []
+            for iteration in range(repetitions):
+                faulty_baseline = run_once(manual, 160 + 2 * iteration, hz=hz)
+                healthy_baseline = run_once(manual_healthy, 161 + 2 * iteration, hz=hz)
+                accepted = (
+                    faulty_baseline["activated"]
+                    and faulty_baseline["deactivated"]
+                    and faulty_baseline["missing_sequence_count"] > 0
+                    and faulty_baseline["max_gap_s"] >= 1.2
+                    and healthy_baseline["activated"]
+                    and healthy_baseline["missing_sequence_count"] == 0
+                    and healthy_baseline["max_gap_s"] < 0.4
+                    and faulty_baseline["sent"] >= hz * 6
+                    and healthy_baseline["sent"] >= hz * 6
+                )
+                baseline_passes.append(accepted)
+                print(
+                    json.dumps(
+                        {
+                            "manual_trial": iteration + 1,
+                            "fault": faulty_baseline,
+                            "control": healthy_baseline,
+                            "pass": accepted,
+                        }
+                    ),
+                    flush=True,
+                )
+            result["manual_equivalent_yaml"] = True
+            result["manual_baseline_passed"] = sum(baseline_passes)
+            result["manual_baseline_trials"] = repetitions
+            result["human_time_savings"] = "NOT_VERIFIED"
+            result["result"] = (
+                "PASS" if all(passes) and all(baseline_passes) else "FAIL"
+            )
         print(json.dumps(result, indent=2), flush=True)
-        return 0 if all(passes) else 1
+        return 0 if result["result"] == "PASS" else 1
 
 
 if __name__ == "__main__":
@@ -272,5 +327,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--hz", type=int, default=int(os.environ.get("BAG2TEST_HZ", str(DEFAULT_HZ)))
     )
+    parser.add_argument("--compare-manual", action="store_true")
     args = parser.parse_args()
-    raise SystemExit(main(args.repetitions, gap_ms=args.gap_ms, hz=args.hz))
+    raise SystemExit(
+        main(
+            args.repetitions,
+            gap_ms=args.gap_ms,
+            hz=args.hz,
+            compare_manual=args.compare_manual,
+        )
+    )

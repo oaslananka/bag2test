@@ -25,6 +25,7 @@ RUN bash -lc 'source /opt/ros/jazzy/setup.bash && colcon build \
 COPY pyproject.toml README.md LICENSE /opt/bag2test/
 COPY src/ /opt/bag2test/src/
 COPY tests/integration/runtime_probe.py /opt/bag2test/tests/integration/runtime_probe.py
+COPY tests/integration/manual_joint_state.yaml /opt/bag2test/tests/integration/manual_joint_state.yaml
 
 RUN python3 -m venv --system-site-packages /opt/bag2test-venv \
     && /opt/bag2test-venv/bin/pip install --no-cache-dir /opt/bag2test
