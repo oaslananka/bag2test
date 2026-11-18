@@ -45,10 +45,17 @@ of the original fault's cause.
 
 ## Interpretation
 
-- **CANDIDATE:** a timestamp gap crossed the selected threshold; the generated injection is a hypothesis.
-- **NO_CANDIDATE:** the selected topic had no gap above that threshold.
+- **CANDIDATE:** a gap between two selected-topic messages crossed the threshold; the generated injection is a hypothesis.
+- **TRAILING_SILENCE:** the topic stops before another recorded channel's last message. This is **recording-coverage evidence**, not proof of a sensor failure. No bounded injection YAML is generated without a recorded recovery.
+- **NO_CANDIDATE:** neither an internal gap nor an evidenced trailing silence crossed the selected threshold.
 - **INSUFFICIENT_DATA:** too few samples to estimate a useful cadence.
 - **NOT_VERIFIED:** the proposed fault was not exercised in ROS 2 and the failure was not reproduced.
+
+[End-of-recording topic silence](docs/terminal-silence.md) is reported
+only when the MCAP's last message comes from another recorded channel.
+A one-topic recording cannot establish how long its silent sensor
+remained unobserved; a clipped analysis window cannot establish a
+terminal outage.
 
 The current generator supports timing-gap hypotheses on `JointState`, `Odometry`, `LaserScan`, `Imu`, and `Twist` ROS 2 CDR topics. Only message metadata is inspected, not sensor or command payloads. A gap in recorded timestamps can result from sensor timing, transport, driver
 behavior or the recorder. The next interval may be unusually short, consistent

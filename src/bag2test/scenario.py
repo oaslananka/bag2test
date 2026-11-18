@@ -92,6 +92,17 @@ def write_results(
         "The fault activation assertion does not verify a robot failure symptom.",
         "Reproduction of this individual incident has not been performed.",
     ]
+    if observed.trailing_silence_s is not None:
+        limitations.append(
+            "The selected topic stops before the recording's global endpoint; "
+            "other recorded messages provide a continued observation window. "
+            "This is a recording-coverage observation, not independent proof "
+            "of sensor failure, missing publishes or a restart."
+        )
+        limitations.append(
+            "A trailing-only silence has no observed recovery or known finite "
+            "fault duration; no bounded fault-injection YAML can be justified."
+        )
     if observed.publish_times_equal_log_times is True:
         limitations.append(
             "All selected MCAP publish_time values equal log_time; this file "

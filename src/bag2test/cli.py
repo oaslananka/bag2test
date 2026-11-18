@@ -43,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Observation: {observation.status} ({observation.count} messages)")
     for path in files:
         print(f"Wrote: {path}")
+    if observation.trailing_silence_s is not None:
+        print(
+            "Trailing silence: selected topic absent for "
+            f"{observation.trailing_silence_s:.6f}s before the last recorded "
+            "message on another channel. Cause NOT VERIFIED."
+        )
     if observation.largest_gap:
         print("Candidate only: symptom reproduction and regression NOT VERIFIED")
         if observation.publish_times_equal_log_times is True:
@@ -59,7 +65,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         print("Test injection against an independent healthy ROS input stream.")
     else:
-        print("No test scenario generated")
+        if observation.status == "TRAILING_SILENCE":
+            print(
+                "No bounded YAML: no topic recovery was observed. "
+                "Inspect recording coverage and an independent healthy publisher."
+            )
+        else:
+            print("No test scenario generated")
     return 0
 
 

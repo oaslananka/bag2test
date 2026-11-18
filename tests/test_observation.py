@@ -297,3 +297,155 @@ def test_imu_observation_yields_candidate_only_not_sensor_recovery(tmp_path: Pat
     assert evidence["root_cause"] == "UNKNOWN"
     assert evidence["symptom_reproduced"] == "NOT_VERIFIED"
     assert evidence["regression_verified"] == "NOT_VERIFIED"
+
+
+def recording_with_trailing_silence(
+    tmp_path: Path,
+    *,
+    topic_count: int = 16,
+    internal_gap_ms: int = 0,
+    independent_end_ms: int = 2000,
+) -> Path:
+    """Synthetic multi-topic MCAP: another real channel survives an IMU outage."""
+    file = tmp_path / "terminal.mcap"
+    start = 1_000_000_000
+    with file.open("wb") as stream:
+        writer = Writer(stream)
+        writer.start()
+        imu_schema = writer.register_schema(
+            name="sensor_msgs/msg/Imu", encoding="ros2msg", data=b""
+        )
+        monitor_schema = writer.register_schema(
+            name="std_msgs/msg/String", encoding="ros2msg", data=b""
+        )
+        imu = writer.register_channel(
+            topic="/bno055/imu", message_encoding="cdr", schema_id=imu_schema
+        )
+        monitor = writer.register_channel(
+            topic="/independent/heartbeat",
+            message_encoding="cdr",
+            schema_id=monitor_schema,
+        )
+        for idx in range(topic_count):
+            t = start + idx * 10_000_000
+            if internal_gap_ms and idx >= 8:
+                t += internal_gap_ms * 1_000_000
+            writer.add_message(channel_id=imu, log_time=t, publish_time=t, data=b"imu")
+        for offset_ms in (5, independent_end_ms):
+            t = start + offset_ms * 1_000_000
+            writer.add_message(
+                channel_id=monitor, log_time=t, publish_time=t, data=b"heartbeat"
+            )
+        writer.finish()
+    return file
+
+
+def test_terminal_sensor_silence_is_observable_without_a_closed_gap(tmp_path: Path):
+    data = recording_with_trailing_silence(tmp_path)
+    obs = inspect(data, "/bno055/imu")
+    assert obs.count == 16
+    assert obs.status == "TRAILING_SILENCE"
+    assert obs.largest_gap is None
+    assert obs.median_period_s == pytest.approx(0.01)
+    assert obs.trailing_silence_s == pytest.approx(1.85)
+    assert obs.trailing_silence_ratio == pytest.approx(185.0)
+    assert obs.recording_end_ns == 3_000_000_000
+    files = write_results(obs, tmp_path / "trailing")
+    assert [f.name for f in files] == ["evidence.json"]
+    evidence = json.loads(files[0].read_text())
+    assert evidence["status"] == "TRAILING_SILENCE"
+    assert evidence["trailing_silence_s"] == pytest.approx(1.85)
+    assert evidence["root_cause"] == "UNKNOWN"
+    assert evidence["hypothesis"] is None
+    assert evidence["regression_verified"] == "NOT_VERIFIED"
+    assert any("independent" in sentence for sentence in evidence["limitations"])
+
+
+def test_single_topic_cannot_establish_a_terminal_outage(tmp_path: Path):
+    obs = inspect(
+        recording(
+            tmp_path, name="sensor_msgs/msg/Imu", topic="/imu", intervals_ms=(10,) * 15
+        ),
+        "/imu",
+    )
+    assert obs.status == "NO_CANDIDATE"
+    assert obs.trailing_silence_s is None
+
+
+def test_an_earlier_independent_topic_does_not_establish_silence(tmp_path: Path):
+    obs = inspect(
+        recording_with_trailing_silence(tmp_path, independent_end_ms=20),
+        "/bno055/imu",
+    )
+    assert obs.status == "NO_CANDIDATE"
+    assert obs.trailing_silence_s is None
+
+
+def test_time_window_disables_unproven_terminal_silence(tmp_path: Path):
+    obs = inspect(
+        recording_with_trailing_silence(tmp_path),
+        "/bno055/imu",
+        end_sec=0.14,
+    )
+    assert obs.status == "NO_CANDIDATE"
+    assert obs.trailing_silence_s is None
+
+
+def test_sparse_data_does_not_assert_terminal_silence(tmp_path: Path):
+    obs = inspect(
+        recording_with_trailing_silence(tmp_path, topic_count=5),
+        "/bno055/imu",
+    )
+    assert obs.status == "INSUFFICIENT_DATA"
+    assert obs.trailing_silence_s is None
+
+
+def test_internal_gap_keeps_candidate_and_reports_terminal_context(tmp_path: Path):
+    obs = inspect(
+        recording_with_trailing_silence(tmp_path, internal_gap_ms=100),
+        "/bno055/imu",
+    )
+    assert obs.status == "CANDIDATE"
+    assert obs.largest_gap is not None
+    assert obs.largest_gap.duration_s == pytest.approx(0.11)
+    assert obs.trailing_silence_s == pytest.approx(1.75)
+    assert {file.name for file in write_results(obs, tmp_path / "out")} == {
+        "evidence.json",
+        "scenario.yaml",
+    }
+
+
+def test_cli_reports_terminal_silence_without_inventing_a_recovery(tmp_path: Path):
+    data = recording_with_trailing_silence(tmp_path)
+    output = tmp_path / "analysis"
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "bag2test.cli",
+            str(data),
+            "--topic",
+            "/bno055/imu",
+            "--out",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "TRAILING_SILENCE" in done.stdout
+    assert "1.850000s" in done.stdout
+    assert "No bounded YAML" in done.stdout
+    assert (output / "evidence.json").exists()
+    assert not (output / "scenario.yaml").exists()
+
+
+def test_terminal_silence_honors_requested_relative_threshold(tmp_path: Path):
+    data = recording_with_trailing_silence(tmp_path, independent_end_ms=190)
+    ordinary = inspect(data, "/bno055/imu")
+    cautious = inspect(data, "/bno055/imu", min_gap_factor=5.0)
+    assert ordinary.status == "TRAILING_SILENCE"
+    assert ordinary.trailing_silence_ratio == pytest.approx(4.0)
+    assert cautious.status == "NO_CANDIDATE"
+    assert cautious.trailing_silence_s is None
