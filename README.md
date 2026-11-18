@@ -71,6 +71,11 @@ Unit tests use synthetic MCAP files and check timing, output shape and error han
 run measured downstream sequence loss against a zero-drop control (5/5
 PASS). A genuine field-incident regression, a faulty-versus-fixed software comparison, and a manual-authoring time benchmark remain **not verified**.
 
+A [comparative feasibility check](docs/comparative-benchmark.md) confirms
+that existing ROS recording tools also find the same timing-gap observation.
+The only distinct current output is an **unverified candidate** for an
+existing ROS fault-injection tool; no engineer-time advantage is established.
+
 This repository is not a general ROS debugger, a robot controller, or a safety system.
 
 ## License
