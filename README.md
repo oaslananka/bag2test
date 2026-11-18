@@ -78,9 +78,12 @@ Unit tests use synthetic MCAP files and check timing, output shape and error han
 run measured downstream sequence loss against a zero-drop control (5/5
 PASS). An independent upstream BNO055 driver bug/fix has also been
 tested with a real ROS 2 executor and a software-emulated UART
-(6/6 controlled trials PASS). This is **not** a physical hardware
-or labeled field-incident regression; no manual-authoring time
-benchmark has been verified.
+(6/6 controlled trials PASS). A separate
+[real ROS 2 to native MCAP acceptance](docs/native-ros2-mcap-acceptance.md)
+checks healthy, silent and recovered recordings directly through this
+CLI (6/6 trials PASS) using the same **software-emulated peripheral**.
+Neither constitutes a labeled physical field-incident regression;
+no manual-authoring time benchmark has been verified.
 
 A [comparative feasibility check](docs/comparative-benchmark.md) confirms
 that existing ROS recording tools also find the same timing-gap observation.
