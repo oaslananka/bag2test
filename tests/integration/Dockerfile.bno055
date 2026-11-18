@@ -1,0 +1,33 @@
+# Optional real-ROS2 BNO055 regression; excluded from ordinary PR CI.
+# Requires network at BUILD time to fetch verified upstream source.
+# Run the resulting image with --network none and no host devices.
+FROM ros@sha256:00b8d47a6e6384a2834e3d01fa87ae767876543baa574f2d64a75c04ea33c698
+
+ARG BAD_REV=d8dd54bd930a9aa104dad6052dfac73ad00fd734
+ARG FIX_REV=fe31e0862b93414dff88a2e0ab496ca03cbbd5a0
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       git python3-serial python3-smbus ros-jazzy-example-interfaces \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --quiet https://github.com/ssharma0704/bno055.git /opt/bno055-source \
+    && git -C /opt/bno055-source fetch --quiet origin fix-startup-race \
+    && git -C /opt/bno055-source worktree add --quiet --detach /opt/bno055-bad "$BAD_REV" \
+    && git -C /opt/bno055-source worktree add --quiet --detach /opt/bno055-fixed "$FIX_REV" \
+    && test "$(git -C /opt/bno055-bad rev-parse HEAD)" = "$BAD_REV" \
+    && test "$(git -C /opt/bno055-fixed rev-parse HEAD)" = "$FIX_REV" \
+    && printf '%s  %s\n' \
+       '17cfc8011773c1a2aa756b354643a9ca7511dc37ea1bc974ec3e2fcb98cc0c3f' \
+       /opt/bno055-bad/bno055/bno055.py \
+       '1e4a00adbae13385e25086bc41155684bcc7fb7a9d15a3cce6e4335f6f019767' \
+       /opt/bno055-fixed/bno055/bno055.py | sha256sum --check --status
+
+COPY tests/integration/bno055_virtual_uart_probe.py /opt/bag2test/bno055_virtual_uart_probe.py
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin bag2test \
+    && chmod -R a+rX /opt/bno055-bad /opt/bno055-fixed /opt/bag2test
+ENV HOME=/home/bag2test
+ENV PYTHONUNBUFFERED=1
+USER bag2test
+
+CMD ["/bin/bash","-lc","source /opt/ros/jazzy/setup.bash && python3 /opt/bag2test/bno055_virtual_uart_probe.py"]
