@@ -327,7 +327,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--hz", type=int, default=int(os.environ.get("BAG2TEST_HZ", str(DEFAULT_HZ)))
     )
-    parser.add_argument("--compare-manual", action="store_true")
+    parser.add_argument(
+        "--compare-manual",
+        action="store_true",
+        default=os.environ.get("BAG2TEST_COMPARE_MANUAL") == "1",
+    )
     args = parser.parse_args()
     raise SystemExit(
         main(
