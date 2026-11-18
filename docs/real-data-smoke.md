@@ -42,3 +42,23 @@ The command-topic candidate generated a YAML structure with injector `type: join
 - No failure reproduction, fixed-version pass, repeatability rate, or time savings against manual authoring has been established.
 
 Until these tests are performed, claims of root cause and reproduced incidents are not supported.
+
+## Ground-truth dataset suitability screening
+
+A separate, independently documented Autoware failure was considered:
+[Zenodo record 14209720](https://zenodo.org/records/14209720),
+[Autoware issue #7563](https://github.com/autowarefoundation/autoware.universe/issues/7563)
+(pedestrian near-vehicle detection failure; dataset CC BY 4.0).
+
+To avoid an unnecessary 412.7 MB download, only the ZIP central directory
+and the contained `metadata.yaml` were read through HTTP byte ranges.
+That metadata reports `storage_identifier: sqlite3`, 4,330 messages over
+33.94 seconds, and mainly `PointCloud2`/Autoware perception message types.
+The archive contains a `.db3` ROS 2 bag, **not MCAP**, and its recorded
+failure concerns object perception, **not a labeled message-timing dropout**.
+
+Therefore this is a documented real fault dataset but **not an eligible
+positive sample for the current MCAP timing-gap generator**. It was not
+converted, run, or treated as a reproduced incident. Broadening the project
+to arbitrary perception failures solely to pass this example would not
+establish its intended value.
