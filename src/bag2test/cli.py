@@ -45,6 +45,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote: {path}")
     if observation.largest_gap:
         print("Candidate only: symptom reproduction and regression NOT VERIFIED")
+        if observation.publish_times_equal_log_times is True:
+            print(
+                "Caution: MCAP publish_time equals log_time for every selected "
+                "message; there is no independent publisher timing evidence."
+            )
+        next_ratio = observation.largest_gap.following_interval_ratio
+        if next_ratio is not None and next_ratio < 0.5:
+            print(
+                "Caution: the next message arrives faster than half the "
+                "normal interval. Catch-up/batching is possible; a log gap "
+                "does not establish message loss."
+            )
+        print("Test injection against an independent healthy ROS input stream.")
     else:
         print("No test scenario generated")
     return 0

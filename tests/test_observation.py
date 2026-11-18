@@ -19,6 +19,7 @@ def recording(
     name: str = "sensor_msgs/msg/JointState",
     topic: str = "/joint_states",
     intervals_ms: tuple[int, ...] = (10, 10, 10, 10, 10, 60, 10, 10, 10, 10, 10),
+    publish_lag_ms: int = 0,
 ) -> Path:
     file = tmp_path / "source.mcap"
     t = 1_000_000_000
@@ -32,7 +33,7 @@ def recording(
         writer.add_message(
             channel_id=channel,
             log_time=t,
-            publish_time=t,
+            publish_time=t - publish_lag_ms * 1_000_000,
             data=b"not-a-decoded-ros-payload",
         )
         for delta in intervals_ms:
@@ -40,7 +41,7 @@ def recording(
             writer.add_message(
                 channel_id=channel,
                 log_time=t,
-                publish_time=t,
+                publish_time=t - publish_lag_ms * 1_000_000,
                 data=b"not-a-decoded-ros-payload",
             )
         writer.finish()
@@ -182,3 +183,72 @@ def test_cli_output_and_non_overwrite(tmp_path: Path):
     second = subprocess.run(command, check=False, capture_output=True, text=True)
     assert second.returncode == 2
     assert "already exists" in second.stderr
+
+
+def test_reports_timestamp_provenance_and_a_post_gap_burst(tmp_path: Path):
+    # The next 2 ms interval can occur when timestamps catch up after a pause.
+    file = recording(
+        tmp_path,
+        intervals_ms=(10, 10, 10, 10, 10, 27, 2, 10, 10, 10, 10),
+    )
+    result = inspect(file, "/joint_states")
+    assert result.status == "CANDIDATE"
+    assert result.publish_times_equal_log_times is True
+    assert result.largest_gap is not None
+    assert result.largest_gap.duration_s == pytest.approx(0.027)
+    assert result.largest_gap.following_interval_s == pytest.approx(0.002)
+    assert result.largest_gap.following_interval_ratio == pytest.approx(0.2)
+
+    out = tmp_path / "result"
+    write_results(result, out)
+    evidence = json.loads((out / "evidence.json").read_text())
+    assert evidence["publish_times_equal_log_times"] is True
+    assert evidence["largest_gap"]["following_interval_s"] == pytest.approx(0.002)
+    assert any("catch-up" in item for item in evidence["limitations"])
+    assert evidence["root_cause"] == "UNKNOWN"
+    assert evidence["symptom_reproduced"] == "NOT_VERIFIED"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "bag2test.cli",
+        str(file),
+        "--topic",
+        "/joint_states",
+        "--out",
+        str(tmp_path / "cli"),
+    ]
+    done = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert "publish_time equals log_time" in done.stdout
+    assert "Catch-up/batching is possible" in done.stdout
+    assert "independent healthy ROS input stream" in done.stdout
+
+
+def test_different_mcap_timestamps_dont_trigger_false_clock_warning(tmp_path: Path):
+    file = recording(tmp_path, publish_lag_ms=2)
+    result = inspect(file, "/joint_states")
+    assert result.publish_times_equal_log_times is False
+    out = tmp_path / "out"
+    write_results(result, out)
+    evidence = json.loads((out / "evidence.json").read_text())
+    assert evidence["publish_times_equal_log_times"] is False
+    assert not any(
+        "no independent publish-vs-record" in l for l in evidence["limitations"]
+    )
+
+
+def test_final_gap_has_no_following_interval(tmp_path: Path):
+    file = recording(tmp_path, intervals_ms=(10,) * 10 + (60,))
+    result = inspect(file, "/joint_states")
+    assert result.status == "CANDIDATE"
+    assert result.largest_gap is not None
+    assert result.largest_gap.following_interval_s is None
+    assert result.largest_gap.following_interval_ratio is None
+
+
+def test_healthy_recording_still_reports_timestamp_provenance(tmp_path: Path):
+    file = recording(tmp_path, intervals_ms=(10,) * 10, publish_lag_ms=1)
+    result = inspect(file, "/joint_states")
+    assert result.status == "NO_CANDIDATE"
+    assert result.publish_times_equal_log_times is False

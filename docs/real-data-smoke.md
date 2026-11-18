@@ -33,6 +33,29 @@ Observed with MCAP Python 1.6.0 and the default 2.5x median-period threshold:
 
 The command-topic candidate generated a YAML structure with injector `type: joint_state`, `config.drop_probability: 1.0`, a relative start around 17.199 seconds and a 27.141 ms duration. The different topic served as a *threshold-based negative control*, not a proof of sensor health.
 
+### Rechecked timestamp context (19 November 2026)
+
+A second read-only pass of the same downloaded file, verified by the SHA-256
+above, showed:
+
+- **6,076/6,076** selected messages had identical MCAP `publish_time` and
+  `log_time` values. These two metadata fields therefore do **not** offer
+  independent confirmation that the publisher was late.
+- The next observed interval **after the 27.140731 ms gap** was only
+  **1.909520 ms** (19.1% of the 10.001136 ms median cadence).
+- The generator now exposes both measurements in `evidence.json` and prints
+  explicit uncertainty warnings. The YAML candidate remains unchanged.
+- The neighboring joint-state stream was again `NO_CANDIDATE` under the
+  2.5x threshold; this does **not** establish that it is a healthy reference
+  stream for injection.
+
+A catch-up/batching explanation is consistent with this timing pattern;
+message loss, its location, and physical root cause remain **NOT VERIFIED**.
+The recorded gap cannot itself be dropped again during a direct replay:
+a meaningful test needs an independent healthy publisher and controlled
+scheduling alignment. The 27 ms **synthetic** ROS 2 acceptance test uses a
+different constructed input and does not validate the cause of this recording.
+
 ## What this does not establish
 
 - No ground-truth failure was provided. A 27 ms logging-time gap might be scheduler or recorder jitter.
