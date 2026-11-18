@@ -56,7 +56,7 @@ python -m pip install -e ".[test]"
 python -m pytest -q
 ```
 
-Unit tests use synthetic MCAP files with deliberately simple payloads and check timing, output shape and error handling. A [separate real-robot recording smoke test](docs/real-data-smoke.md) was performed without committing that recording. A controlled fault-injection run, a faulty-versus-fixed software comparison, and a manual-authoring time benchmark remain **not verified**.
+Unit tests use synthetic MCAP files and check timing, output shape and error handling. The [real-robot recording smoke test](docs/real-data-smoke.md) analyzes a separate, non-committed recording. An [opt-in ROS 2 runtime acceptance test](docs/ros2-runtime-acceptance.md) exercises the generated YAML against a compiled fault injector with synthetic ROS messages and negative controls (3/3 PASS). A genuine field-incident regression, a faulty-versus-fixed software comparison, and a manual-authoring time benchmark remain **not verified**.
 
 This repository is not a general ROS debugger, a robot controller, or a safety system.
 
