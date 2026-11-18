@@ -39,7 +39,22 @@ into this repository. The experiment has no external ROS network access.
 6. Run three separate pairs in isolated ROS domains.
 
 The independent downstream observation matters: fault activation alone
-would not demonstrate a loss of robot data.
+would not demonstrate a loss of robot data. For short windows, the harness
+also tracks actual integer sequence numbers encoded in JointState positions.
+It waits for a fully connected ROS relay and discards warmup messages before
+counting missing data.
+
+### Short-gap experiment
+
+Use the same pinned container with a 27 ms input gap and a 100 Hz publisher:
+
+~~~bash
+docker run --rm --network none --memory 4g --cpus 4   -e BAG2TEST_GAP_MS=27 -e BAG2TEST_HZ=100   -e BAG2TEST_REPETITIONS=5 bag2test-ros2-acceptance
+~~~
+
+The candidate schedule is derived from a newly constructed synthetic MCAP.
+It is **not** the 145 MB real-robot demonstration bag and does not replay
+its CDR payloads.
 
 ## Recorded results
 
@@ -54,7 +69,37 @@ and pinned upstream source, CPU-only Docker.
 
 Both the fault and control runs emitted the expected active and inactive
 fault events. The controlled fault gap exceeded 1.2 seconds in every run;
-the control maximum gap stayed below 0.4 seconds. All **3/3** pairs passed.
+the control maximum gap stayed below 0.4 seconds. All **3/3** pairs passed
+in the original experiment. After the sequence-counting and ROS
+warmup refinements, the original 20 Hz / 2-second experiment was rerun:
+another **3/3** positive/negative pairs passed, each with 150 sent /
+110 downstream fault messages and 150/150 healthy controls.
+
+### Short 27 ms window / 100 Hz ROS 2 publishing
+
+A separate experiment was run on a rootless, isolated CPU Docker container,
+with a genuinely serialized JointState stream and a *synthetically inserted*
+27 ms MCAP log-time interval. The generator emitted the unmodified short
+injection candidate. The healthy control changed only drop probability to
+zero. Sequence numbers, not merely wall-clock gaps, were checked.
+
+| Trial | Fault sent/received | Missing sequences | Control sent/received | Result |
+| --- | --- | ---: | --- | --- |
+| 1 | 750/748 | 2 | 750/750 | PASS |
+| 2 | 750/747 | 3 | 750/750 | PASS |
+| 3 | 750/747 | 3 | 750/750 | PASS |
+| 4 | 750/747 | 3 | 750/750 | PASS |
+| 5 | 750/747 | 3 | 750/750 | PASS |
+
+Fault and control both emitted activation/deactivation events, proving why
+the events alone would have been insufficient. Five of five pairs showed
+real downstream sequence loss exclusively in the injected stream.
+
+The control maximum observed inter-arrival time occasionally reached
+70 ms even though **no messages were missing**. This demonstrates that
+an arrival-time gap is not itself proof of packet loss or its cause.
+Five passes are a narrow functional measurement, not a population-wide
+reliability guarantee.
 
 ### Scope of this evidence
 
@@ -65,6 +110,7 @@ controlled ROS 2 experiment; a zero-drop negative control did not.
 **NOT VERIFIED:** a real-world robot failure, its physical root cause,
 replay of a recorded robot's complete behavior, faulty-versus-fixed software
 regression, performance or manual-authoring time savings, or reliable
-reproduction of brief gaps such as the previously observed 27 ms gap.
-The MCAP stimulus in this experiment was synthetically constructed,
-even though it contains genuine ROS 2 serialized JointState messages.
+reproduction of *arbitrary real-world* 27 ms gaps in different scheduling
+conditions. The MCAP stimuli in both experiments were synthetically
+constructed, even though they contain genuine ROS 2 serialized JointState
+messages. The real demonstration's timing-gap *cause* remains unknown.
