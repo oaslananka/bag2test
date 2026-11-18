@@ -247,8 +247,16 @@ def main(repetitions: int, *, gap_ms: int, hz: int) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repetitions", type=int, default=3)
-    parser.add_argument("--gap-ms", type=int, default=2000)
-    parser.add_argument("--hz", type=int, default=DEFAULT_HZ)
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=int(os.environ.get("BAG2TEST_REPETITIONS", "3")),
+    )
+    parser.add_argument(
+        "--gap-ms", type=int, default=int(os.environ.get("BAG2TEST_GAP_MS", "2000"))
+    )
+    parser.add_argument(
+        "--hz", type=int, default=int(os.environ.get("BAG2TEST_HZ", str(DEFAULT_HZ)))
+    )
     args = parser.parse_args()
     raise SystemExit(main(args.repetitions, gap_ms=args.gap_ms, hz=args.hz))
