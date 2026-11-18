@@ -73,8 +73,10 @@ PASS). A genuine field-incident regression, a faulty-versus-fixed software compa
 
 A [comparative feasibility check](docs/comparative-benchmark.md) confirms
 that existing ROS recording tools also find the same timing-gap observation.
-The only distinct current output is an **unverified candidate** for an
-existing ROS fault-injection tool; no engineer-time advantage is established.
+An [independently pinned IMU driver regression](docs/upstream-imu-regression.md)
+distinguishes a genuine source-level fix from a merely similar ROS topic-drop
+symptom. The tool's output remains an **unverified candidate** for an
+existing fault-injection runner; no human engineering-time advantage is established.
 
 This repository is not a general ROS debugger, a robot controller, or a safety system.
 

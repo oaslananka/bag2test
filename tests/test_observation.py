@@ -269,3 +269,31 @@ def test_manual_fault_scenario_matches_generated_synthetic_reference(tmp_path: P
         )
     )
     assert generated == manual
+
+
+def test_imu_observation_yields_candidate_only_not_sensor_recovery(tmp_path: Path):
+    """IMU topic dropout is not the same as a serial driver's failed read."""
+    data = recording(
+        tmp_path,
+        name="sensor_msgs/msg/Imu",
+        topic="/imu/data",
+        intervals_ms=(10,) * 5 + (60,) + (10,) * 5,
+    )
+    observed = inspect(data, "/imu/data")
+    assert observed.status == "CANDIDATE"
+    assert observed.message_type == "sensor_msgs/msg/Imu"
+    scenario = candidate_scenario(observed)
+    assert scenario["injectors"][0]["type"] == "imu"
+    assert scenario["injectors"][0]["topic"]["input_topic"] == "/imu/data_raw"
+    assert scenario["injectors"][0]["topic"]["output_topic"] == "/imu/data"
+    assert scenario["faults"][0]["config"]["drop_probability"] == 1.0
+    assert scenario["assertions"][0]["type"] == "fault_event"
+    assert not any(
+        assertion["type"] == "node_restart" for assertion in scenario["assertions"]
+    )
+    out = tmp_path / "result"
+    write_results(observed, out)
+    evidence = json.loads((out / "evidence.json").read_text())
+    assert evidence["root_cause"] == "UNKNOWN"
+    assert evidence["symptom_reproduced"] == "NOT_VERIFIED"
+    assert evidence["regression_verified"] == "NOT_VERIFIED"
