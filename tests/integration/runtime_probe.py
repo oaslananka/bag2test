@@ -94,12 +94,18 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
         publisher = node.create_publisher(JointState, "/joint_states_raw", 10)
         arrivals = []
         received_sequences = []
+        warmup_received = []
         events = []
 
         def on_joint_state(msg: JointState) -> None:
+            if not msg.position:
+                return
+            sequence = int(msg.position[0])
+            if sequence < 0:
+                warmup_received.append(time.monotonic())
+                return
             arrivals.append(time.monotonic())
-            if msg.position:
-                received_sequences.append(int(msg.position[0]))
+            received_sequences.append(sequence)
 
         _subscriber = node.create_subscription(
             JointState,
@@ -127,13 +133,11 @@ def run_once(file: Path, domain: int, *, hz: int) -> dict:
         # receiving a handful of warmup messages before counting sequences;
         # otherwise lost startup samples resemble injected dropouts.
         warmup_limit = time.monotonic() + 2.0
-        while len(received_sequences) < 5 and time.monotonic() < warmup_limit:
+        while len(warmup_received) < 5 and time.monotonic() < warmup_limit:
             publisher.publish(JointState(name=["joint_a"], position=[-1.0]))
             rclpy.spin_once(node, timeout_sec=0.02)
-        if len(received_sequences) < 5:
+        if len(warmup_received) < 5:
             raise RuntimeError(f"Cannot establish a healthy ROS relay; see {logfile}")
-        arrivals.clear()
-        received_sequences.clear()
 
         begin = time.monotonic()
         next_send = begin
