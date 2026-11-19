@@ -10,13 +10,26 @@ bag2test examines timing gaps in ROS 2 MCAP recordings and generates **candidate
 
 ## Install
 
-Python 3.11 or later is required. ROS 2 is not required to inspect an MCAP file.
+Python 3.11 or later and Git are required. ROS 2 is not required to inspect an MCAP file.
+Clone the repository and install in a virtual environment:
 
 ```bash
-python -m pip install -e .
+git clone https://github.com/oaslananka/bag2test.git
+cd bag2test
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+bag2test --help
 ```
 
+On Windows PowerShell, use `.\.venv\Scripts\Activate.ps1` instead of `source .venv/bin/activate`.
+For editable development and local tests, use `python -m pip install -e ".[test]"`.
+
 ## Analyze a recording
+
+Provide your own ROS 2 MCAP recording: `recording.mcap` below is a placeholder, **not a bundled sample**.
+The `--topic` argument must match a topic in that recording. If you have ROS 2 installed,
+`ros2 bag info recording.mcap` can show its topic names.
 
 ```bash
 bag2test recording.mcap --topic /joint_states --out results
