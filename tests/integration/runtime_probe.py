@@ -347,6 +347,10 @@ def main(
         raise ValueError("message_type must be joint_state or imu")
     if compare_manual and (gap_ms != 2000 or hz != 20 or message_type != "joint_state"):
         raise ValueError("Manual baseline supports only 2000 ms, 20 Hz JointState")
+    if (submitted_scenario is not None or export_recording is not None) and (
+        gap_ms != 2000 or hz != 20
+    ):
+        raise ValueError("Study scoring is calibrated only for 20 Hz, 2000 ms")
     if submitted_scenario is not None and compare_manual:
         raise ValueError(
             "Submitted study YAML and static manual comparison are exclusive"

@@ -95,6 +95,27 @@ The test returns machine-readable `result: PASS` or `FAIL` and
 missing IDs, longest gap and negative-control results. An automated PASS
 says nothing about the time a human needed.
 
+## Verified automated pilot (not human evidence)
+
+On 19 November 2026 the evaluator generated separate JointState and IMU
+synthetic ROS 2 CDR MCAP files (3,277 and 3,554 bytes), then executed the
+**actual** upstream Jazzy fault injector in a non-root container with no
+network or host devices.
+
+| Submitted scenario | Fault received / sent | Missing IDs | Healthy received / sent | Verdict |
+| --- | --- | --- | --- | --- |
+| Independent, hand-authored JointState YAML | 110 / 150 | 40 | 150 / 150 | PASS |
+| bag2test-generated JointState YAML | 110 / 150 | 40 | 150 / 150 | PASS |
+| bag2test-generated IMU YAML | 110 / 150 | 40 | 150 / 150 | PASS |
+| Wrong output topic | Not launched | — | — | REJECTED |
+| Wrong fault duration (0.25 s instead of 2 s) | Not launched | — | — | REJECTED |
+
+The original, non-study §--compare-manual§ integration mode was also
+rechecked at one trial per arm: both generated and hand-authored
+JointState scenarios passed real ROS fault and zero-drop controls.
+The values above are machine-verified **functional acceptance**,
+**not measured human effort, task usability or time savings**.
+
 ## Recording an actual usability outcome
 
 Prefer at least four independent participants and balance both task types
