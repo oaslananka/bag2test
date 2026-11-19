@@ -16,3 +16,6 @@ build/
 *.sqlite3
 log/
 install/
+
+# Temporary evaluator fixtures, submitted YAML and private study notes.
+study-data/

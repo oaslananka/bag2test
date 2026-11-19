@@ -24,6 +24,16 @@ No human recordings, personal names or response data are committed.
 
 ## Prepare two independent, comparable tasks
 
+**Evaluator-only instructions.** Do **not** share this evaluator document,
+the repository source tree, the static reference YAML, historical pilot
+results, the target duration or the scoring implementation with participants.
+Give each person only the relevant MCAP task recording, its required
+input/output topic names, normal upstream documentation and the
+[participant brief](study-participant-brief.md). Preinstall the same ROS 2
+dependencies for both groups; provide bag2test as an additional installed
+tool only to the assisted group. Because this is a public repository,
+ask about prior exposure to the study solution and record that limitation.
+
 Build the image once, on a Linux Docker host or Docker Desktop:
 
 ```bash
@@ -32,7 +42,10 @@ docker build -f tests/integration/Dockerfile \
 ```
 
 Create a disposable host folder writable by the unprivileged container
-user (UID 10001), then export a fresh task recording:
+user (UID 10001), then export a fresh task recording. The named
+`study-data/` directory is Git-ignored to prevent ordinary accidental
+staging of participant YAML, notes and evaluation results. The evaluator
+must still avoid copying private participant data into Git by other means:
 
 ```bash
 mkdir -p ./study-data
@@ -49,14 +62,11 @@ For a distinct second task, use
 `BAG2TEST_EXPORT_RECORDING=/study/imu.mcap`. Use separate folders for
 different study sessions, never overwrite a participant's work.
 
-Present the same user-facing requirement to both conditions:
-
-> Inspect the supplied ROS 2 MCAP recording. Produce a YAML scenario for
-> upstream `ros2_fault_injection` that introduces a timed downstream topic
-> drop resembling the observed gap, with a fault activation assertion.
-> The evaluator will run it on an independent healthy 20 Hz publisher and
-> verify both a failing-path symptom and a zero-drop negative control.
-> Do not claim you diagnosed the original physical cause.
+For both conditions, use the short
+[participant brief](study-participant-brief.md) rather than copying the
+timing parameters or result table from this evaluator-only document.
+Participants must infer the gap interval from the MCAP; do not tell them
+the known answer from the synthetic fixture.
 
 A **manual** condition may inspect recording data, upstream injector docs
 and ROS tools, but not invoke bag2test's generator or copy its already
@@ -110,7 +120,7 @@ network or host devices.
 | Wrong output topic | Not launched | — | — | REJECTED |
 | Wrong fault duration (0.25 s instead of 2 s) | Not launched | — | — | REJECTED |
 
-The original, non-study §--compare-manual§ integration mode was also
+The original, non-study `--compare-manual` integration mode was also
 rechecked at one trial per arm: both generated and hand-authored
 JointState scenarios passed real ROS fault and zero-drop controls.
 The values above are machine-verified **functional acceptance**,
