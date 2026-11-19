@@ -105,7 +105,11 @@ An [independently pinned IMU driver regression](docs/upstream-imu-regression.md)
 demonstrates the actual ROS 2 driver bug/fix and virtual-UART supervised
 recovery, separately from a synthetically injected ROS topic drop.
 The CLI's output remains an **unverified candidate** for an
-existing fault-injection runner; no human engineering-time advantage is established.
+existing fault-injection runner. An opt-in
+[engineer task evaluation procedure](docs/engineer-task-study.md)
+can independently test a submitted manual or assisted YAML against
+real ROS 2 fault and healthy-control behavior. No independent human
+study or engineering-time advantage has been established.
 
 This repository is not a general ROS debugger, a robot controller, or a safety system.
 

@@ -89,7 +89,12 @@ def make_recording(
 
 
 def run_once(
-    file: Path, domain: int, *, hz: int, message_type: str = "joint_state"
+    file: Path,
+    domain: int,
+    *,
+    hz: int,
+    message_type: str = "joint_state",
+    expected_fault_id: str = "candidate_gap",
 ) -> dict:
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(domain)
@@ -210,8 +215,8 @@ def run_once(
             "missing_sequence_count": len(missing),
             "missing_sequence_sample": missing[:12],
             "max_gap_s": round(max(gaps, default=0.0), 3),
-            "activated": ("candidate_gap", "active") in events,
-            "deactivated": ("candidate_gap", "inactive") in events,
+            "activated": (expected_fault_id, "active") in events,
+            "deactivated": (expected_fault_id, "inactive") in events,
             "log": str(logfile),
         }
     finally:
@@ -233,6 +238,93 @@ def run_once(
         out.close()
 
 
+def validate_study_submission(
+    content: object, *, message_type: str, gap_ms: int
+) -> str:
+    """Restrict participant YAML to an isolated, single bounded topic fault.
+
+    This is a study scorer for a declared synthetic exercise, not a
+    general-purpose upstream schema validator or ROS safety system.
+    """
+    if not isinstance(content, dict):
+        raise TypeError("Study submission must contain a YAML mapping")
+    if set(content) != {"injectors", "faults", "assertions"}:
+        raise ValueError("Study submission must have injectors, faults, assertions")
+    injector_list = content["injectors"]
+    fault_list = content["faults"]
+    assertions = content["assertions"]
+    if not all(
+        isinstance(group, list) and len(group) == 1
+        for group in (injector_list, fault_list, assertions)
+    ):
+        raise ValueError("Study requires exactly one injector, fault, and assertion")
+    injector, fault, assertion = (
+        injector_list[0],
+        fault_list[0],
+        assertions[0],
+    )
+    if not all(isinstance(value, dict) for value in (injector, fault, assertion)):
+        raise ValueError("Study elements must be YAML mappings")
+
+    upstream, downstream = (
+        ("/joint_states_raw", "/joint_states")
+        if message_type == "joint_state"
+        else ("/imu/data_raw", "/imu/data")
+    )
+    topics = injector.get("topic")
+    if (
+        set(injector) != {"id", "type", "topic"}
+        or not isinstance(injector["id"], str)
+        or not injector["id"]
+        or injector["type"] != message_type
+        or not isinstance(topics, dict)
+        or topics.get("input_topic") != upstream
+        or topics.get("output_topic") != downstream
+        or set(topics) != {"input_topic", "output_topic", "qos_depth"}
+        or type(topics["qos_depth"]) is not int
+        or not 1 <= topics["qos_depth"] <= 100
+    ):
+        raise ValueError("Study injector must match the isolated ROS topics and type")
+
+    if set(fault) != {
+        "id",
+        "injector_id",
+        "active_on_startup",
+        "start",
+        "duration",
+        "config",
+    }:
+        raise ValueError("Study fault must use the bounded standard fault fields")
+    fault_id = fault["id"]
+    if (
+        not isinstance(fault_id, str)
+        or not fault_id
+        or fault["injector_id"] != injector["id"]
+        or fault["active_on_startup"] is not False
+        or type(fault["start"]) not in (int, float)
+        or type(fault["duration"]) not in (int, float)
+        or not 2.45 <= fault["start"] <= 2.55
+        or not abs(fault["duration"] - gap_ms / 1000) <= 0.05
+        or not isinstance(fault["config"], dict)
+        or set(fault["config"]) != {"drop_probability"}
+        or type(fault["config"]["drop_probability"]) not in (int, float)
+        or fault["config"]["drop_probability"] != 1.0
+    ):
+        raise ValueError(
+            "Study fault must drop messages from 2.5s for the requested duration"
+        )
+    if (
+        set(assertion) != {"id", "type", "fault_id", "state", "within"}
+        or assertion["type"] != "fault_event"
+        or assertion["fault_id"] != fault_id
+        or assertion["state"] != "active"
+        or type(assertion["within"]) not in (int, float)
+        or not 2.55 <= assertion["within"] <= 10.0
+    ):
+        raise ValueError("Study needs an activation assertion for the same fault")
+    return fault_id
+
+
 def main(
     repetitions: int,
     *,
@@ -240,6 +332,8 @@ def main(
     hz: int,
     compare_manual: bool = False,
     message_type: str = "joint_state",
+    submitted_scenario: Path | None = None,
+    export_recording: Path | None = None,
 ) -> int:
     if not 1 <= repetitions <= 10:
         raise ValueError("repetitions must be between 1 and 10")
@@ -253,6 +347,46 @@ def main(
         raise ValueError("message_type must be joint_state or imu")
     if compare_manual and (gap_ms != 2000 or hz != 20 or message_type != "joint_state"):
         raise ValueError("Manual baseline supports only 2000 ms, 20 Hz JointState")
+    if (submitted_scenario is not None or export_recording is not None) and (
+        gap_ms != 2000 or hz != 20
+    ):
+        raise ValueError("Study scoring is calibrated only for 20 Hz, 2000 ms")
+    if submitted_scenario is not None and compare_manual:
+        raise ValueError(
+            "Submitted study YAML and static manual comparison are exclusive"
+        )
+    if export_recording is not None:
+        if submitted_scenario is not None:
+            raise ValueError("Export recording and run submitted scenario separately")
+        if export_recording.exists() or not export_recording.parent.is_dir():
+            raise ValueError(
+                "Recording output must be a NEW file in an existing directory"
+            )
+        make_recording(
+            export_recording, gap_ms=gap_ms, hz=hz, message_type=message_type
+        )
+        print(
+            json.dumps(
+                {
+                    "kind": "synthetic_ros2_cdr_mcap_study_fixture",
+                    "recording": str(export_recording),
+                    "publisher_hz": hz,
+                    "expected_gap_ms": gap_ms,
+                    "message_type": message_type,
+                    "human_time_savings": "NOT_VERIFIED",
+                }
+            ),
+            flush=True,
+        )
+        return 0
+    submitted_fault_id = "candidate_gap"
+    if submitted_scenario is not None:
+        if not submitted_scenario.is_file():
+            raise ValueError("Study submission YAML does not exist")
+        submitted_doc = yaml.safe_load(submitted_scenario.read_text(encoding="utf-8"))
+        submitted_fault_id = validate_study_submission(
+            submitted_doc, message_type=message_type, gap_ms=gap_ms
+        )
     with tempfile.TemporaryDirectory(prefix="bag2test-runtime-") as folder:
         base = Path(folder)
         recording = base / "known_synthetic_gap.mcap"
@@ -261,7 +395,11 @@ def main(
         observation = inspect(recording, topic)
         assert observation.status == "CANDIDATE"
         write_results(observation, base / "candidate")
-        candidate = base / "candidate" / "scenario.yaml"
+        candidate = (
+            submitted_scenario
+            if submitted_scenario is not None
+            else base / "candidate" / "scenario.yaml"
+        )
         control = yaml.safe_load(candidate.read_text())
         control["faults"][0]["config"]["drop_probability"] = 0.0
         healthy = base / "healthy.yaml"
@@ -269,10 +407,18 @@ def main(
         passes = []
         for iteration in range(repetitions):
             faulty = run_once(
-                candidate, 110 + 2 * iteration, hz=hz, message_type=message_type
+                candidate,
+                110 + 2 * iteration,
+                hz=hz,
+                message_type=message_type,
+                expected_fault_id=submitted_fault_id,
             )
             normal = run_once(
-                healthy, 111 + 2 * iteration, hz=hz, message_type=message_type
+                healthy,
+                111 + 2 * iteration,
+                hz=hz,
+                message_type=message_type,
+                expected_fault_id=submitted_fault_id,
             )
             common = (
                 faulty["activated"]
@@ -289,6 +435,14 @@ def main(
                     and faulty["missing_sequence_count"] > 0
                     and normal["max_gap_s"] < 0.4
                 )
+                if submitted_scenario is not None:
+                    # A valid study submission must cause the *targeted*
+                    # bounded 2-second outage, not just any message loss.
+                    ok = (
+                        ok
+                        and 1.6 <= faulty["max_gap_s"] <= 2.6
+                        and 28 <= faulty["missing_sequence_count"] <= 52
+                    )
             else:
                 # A fault lifecycle event is not proof that a 27ms window
                 # coincided with any published JointState. Count the missing
@@ -313,6 +467,12 @@ def main(
             "message_type": message_type,
             "requested_gap_ms": gap_ms,
             "observed_source_gap_s": observation.largest_gap.duration_s,
+            "scenario_source": (
+                "external_study_submission"
+                if submitted_scenario is not None
+                else "bag2test_generated"
+            ),
+            "human_time_savings": "NOT_VERIFIED",
             "passed": sum(passes),
             "trials": len(passes),
             "real_incident_reproduced": "NOT_VERIFIED",
@@ -397,6 +557,26 @@ if __name__ == "__main__":
         action="store_true",
         default=os.environ.get("BAG2TEST_COMPARE_MANUAL") == "1",
     )
+    parser.add_argument(
+        "--study-submission",
+        type=Path,
+        default=(
+            Path(os.environ["BAG2TEST_STUDY_SUBMISSION"])
+            if "BAG2TEST_STUDY_SUBMISSION" in os.environ
+            else None
+        ),
+        help="Evaluate an externally authored study YAML in isolated real ROS2",
+    )
+    parser.add_argument(
+        "--export-study-recording",
+        type=Path,
+        default=(
+            Path(os.environ["BAG2TEST_EXPORT_RECORDING"])
+            if "BAG2TEST_EXPORT_RECORDING" in os.environ
+            else None
+        ),
+        help="Write a NEW synthetic ROS2 CDR MCAP fixture, then exit",
+    )
     args = parser.parse_args()
     raise SystemExit(
         main(
@@ -405,5 +585,7 @@ if __name__ == "__main__":
             hz=args.hz,
             compare_manual=args.compare_manual,
             message_type=args.message_type,
+            submitted_scenario=args.study_submission,
+            export_recording=args.export_study_recording,
         )
     )
